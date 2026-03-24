@@ -48,7 +48,7 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
-            target: nginx        # <-- use the nginx stage
+            target: nginx
         restart: unless-stopped
         expose:
             - "80"
@@ -59,7 +59,7 @@ services:
             app:
                 condition: service_healthy
         healthcheck:
-            test: [ "CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/" ]
+            test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
             interval: 10s
             timeout: 3s
             retries: 3
@@ -70,27 +70,7 @@ services:
         labels:
             - traefik.enable=true
             - traefik.docker.network=dokploy-network
-
-            # Main Laravel site
-            - traefik.http.routers.laravel.rule=Host(`novatv.novadevlabs.com`) && PathPrefix(`/`)
-            - traefik.http.routers.laravel.entrypoints=websecure
-            - traefik.http.routers.laravel.tls=true
-            - traefik.http.routers.laravel.tls.certresolver=letsencrypt
-            - traefik.http.services.laravel.loadbalancer.server.port=80
-
-            # Redirect HTTP -> HTTPS
-            - traefik.http.routers.laravel-http.rule=Host(`novatv.novadevlabs.com`)
-            - traefik.http.routers.laravel-http.entrypoints=web
-            - traefik.http.routers.laravel-http.middlewares=https-redirect
-            - traefik.http.middlewares.https-redirect.redirectscheme.scheme=https
-            - traefik.http.middlewares.https-redirect.redirectscheme.permanent=true
-
-            # nginx-test router (bypasses Laravel)
-            - traefik.http.routers.nginx-test.rule=Host(`novatv.novadevlabs.com`) && Path(`/nginx-test`)
-            - traefik.http.routers.nginx-test.entrypoints=websecure
-            - traefik.http.routers.nginx-test.tls=true
-            - traefik.http.routers.nginx-test.tls.certresolver=letsencrypt
-            - traefik.http.services.nginx-test.loadbalancer.server.port=80
+            # Let Dokploy UI manage all routing rules — do NOT add more labels here
 
     postgres:
         image: postgres:16-alpine
@@ -152,6 +132,8 @@ services:
                 condition: service_started
         networks:
             - iptv_network
+        labels:
+            - traefik.enable=false
 
     scheduler:
         build:
@@ -186,6 +168,8 @@ services:
                 condition: service_started
         networks:
             - iptv_network
+        labels:
+            - traefik.enable=false
 
 volumes:
     postgres_data:
