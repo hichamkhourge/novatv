@@ -10,7 +10,7 @@ services:
             - APP_ENV=production
             - APP_KEY=${APP_KEY}
             - APP_DEBUG=false
-            - APP_URL=${APP_URL:-http://localhost}
+            - APP_URL=${APP_URL}
             - DB_CONNECTION=pgsql
             - DB_HOST=postgres
             - DB_PORT=5432
@@ -25,6 +25,9 @@ services:
             - SESSION_DRIVER=redis
             - QUEUE_CONNECTION=redis
             - LOG_CHANNEL=stack
+            - SESSION_DOMAIN=${SESSION_DOMAIN}
+            - SANCTUM_STATEFUL_DOMAINS=${SANCTUM_STATEFUL_DOMAINS}
+            - TRUSTED_PROXIES=*
         volumes:
             - storage_data:/var/www/html/storage
             - bootstrap_cache:/var/www/html/bootstrap/cache
@@ -111,7 +114,7 @@ services:
             - APP_ENV=production
             - APP_KEY=${APP_KEY}
             - APP_DEBUG=false
-            - APP_URL=${APP_URL:-http://localhost}
+            - APP_URL=${APP_URL}
             - DB_CONNECTION=pgsql
             - DB_HOST=postgres
             - DB_PORT=5432
@@ -147,7 +150,7 @@ services:
             - APP_ENV=production
             - APP_KEY=${APP_KEY}
             - APP_DEBUG=false
-            - APP_URL=${APP_URL:-http://localhost}
+            - APP_URL=${APP_URL}
             - DB_CONNECTION=pgsql
             - DB_HOST=postgres
             - DB_PORT=5432
