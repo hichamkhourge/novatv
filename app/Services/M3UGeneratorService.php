@@ -54,6 +54,13 @@ class M3UGeneratorService
 
     private function buildStreamUrl(array $channel, IptvUser $user): string
     {
+        // Check if user's M3U source is configured for direct URLs
+        if ($user->m3uSource && $user->m3uSource->use_direct_urls) {
+            // Return original URL directly from source
+            return $channel['url'] ?? '';
+        }
+
+        // Generate proxied URL (default behavior)
         // Generate stream ID from channel URL or tvg-id
         $streamId = md5($channel['url'] ?? $channel['tvg_id'] ?? rand());
 

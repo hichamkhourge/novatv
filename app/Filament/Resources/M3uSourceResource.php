@@ -34,6 +34,10 @@ class M3uSourceResource extends Resource
                 Forms\Components\Toggle::make('is_active')
                     ->default(true)
                     ->required(),
+                Forms\Components\Toggle::make('use_direct_urls')
+                    ->label('Use Direct URLs from Source')
+                    ->helperText('When enabled, playlists will contain original source URLs instead of proxied URLs. Note: This exposes source credentials to users and disables connection tracking.')
+                    ->default(false),
             ]);
     }
 
@@ -48,6 +52,10 @@ class M3uSourceResource extends Resource
                     ->limit(50)
                     ->searchable(),
                 Tables\Columns\IconColumn::make('is_active')
+                    ->boolean()
+                    ->sortable(),
+                Tables\Columns\IconColumn::make('use_direct_urls')
+                    ->label('Direct URLs')
                     ->boolean()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('last_fetched_at')

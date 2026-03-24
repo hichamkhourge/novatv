@@ -89,16 +89,16 @@ class IptvUserResource extends Resource
                 Tables\Columns\TextColumn::make('m3u_url')
                     ->label('M3U Playlist Link')
                     ->getStateUsing(fn (IptvUser $record): string =>
-                        'http://localhost:8080/get.php?username=' . urlencode($record->username) . '&password=' . urlencode($record->password)
+                        config('app.url') . '/get.php?username=' . urlencode($record->username) . '&password=' . urlencode($record->password)
                     )
                     ->copyable()
                     ->url(fn (IptvUser $record): string =>
-                        'http://localhost:8080/get.php?username=' . urlencode($record->username) . '&password=' . urlencode($record->password)
+                        config('app.url') . '/get.php?username=' . urlencode($record->username) . '&password=' . urlencode($record->password)
                     )
                     ->openUrlInNewTab()
                     ->limit(50)
                     ->tooltip(fn (IptvUser $record): string =>
-                        'http://localhost:8080/get.php?username=' . urlencode($record->username) . '&password=' . urlencode($record->password)
+                        config('app.url') . '/get.php?username=' . urlencode($record->username) . '&password=' . urlencode($record->password)
                     ),
                 Tables\Columns\IconColumn::make('is_active')
                     ->boolean()
