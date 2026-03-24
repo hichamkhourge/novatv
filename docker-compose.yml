@@ -42,6 +42,8 @@ services:
             dockerfile: Dockerfile
             target: nginx        # <-- use the nginx stage
         restart: unless-stopped
+        ports:
+            - "80:80"
         expose:
             - "80"
         volumes:
