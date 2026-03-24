@@ -51,6 +51,7 @@ services:
       - .:/var/www/html
       - /var/www/html/vendor
       - storage_data:/var/www/html/storage
+      - bootstrap_cache:/var/www/html/bootstrap/cache
     depends_on:
       postgres:
         condition: service_healthy
@@ -174,6 +175,7 @@ services:
       - .:/var/www/html
       - /var/www/html/vendor
       - storage_data:/var/www/html/storage
+      - bootstrap_cache:/var/www/html/bootstrap/cache
     depends_on:
       app:
         condition: service_healthy
@@ -184,6 +186,7 @@ volumes:
   postgres_data:
   redis_data:
   storage_data:
+  bootstrap_cache:
 
 networks:
   iptv_network:
