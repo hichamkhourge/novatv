@@ -6,19 +6,25 @@ services:
             target: app
         restart: unless-stopped
         environment:
+            - APP_NAME=IPTVProvider
             - APP_ENV=production
             - APP_KEY=${APP_KEY}
+            - APP_DEBUG=false
+            - APP_URL=${APP_URL:-http://localhost}
             - DB_CONNECTION=pgsql
             - DB_HOST=postgres
             - DB_PORT=5432
             - DB_DATABASE=${DB_DATABASE}
             - DB_USERNAME=${DB_USERNAME}
             - DB_PASSWORD=${DB_PASSWORD}
+            - REDIS_CLIENT=predis
             - REDIS_HOST=redis
             - REDIS_PORT=6379
+            - REDIS_PASSWORD=null
             - CACHE_DRIVER=redis
             - SESSION_DRIVER=redis
             - QUEUE_CONNECTION=redis
+            - LOG_CHANNEL=stack
         volumes:
             - storage_data:/var/www/html/storage
             - bootstrap_cache:/var/www/html/bootstrap/cache
@@ -28,10 +34,10 @@ services:
             redis:
                 condition: service_started
         healthcheck:
-            test: ["CMD-SHELL", "php-fpm -t || exit 1"]
-            interval: 15s
-            timeout: 10s
-            retries: 5
+            test: ["CMD-SHELL", "pidof php-fpm || exit 1"]
+            interval: 10s
+            timeout: 5s
+            retries: 3
             start_period: 120s
         networks:
             - iptv_network
@@ -117,15 +123,23 @@ services:
         restart: unless-stopped
         command: php artisan queue:work --sleep=3 --tries=3
         environment:
+            - APP_NAME=IPTVProvider
             - APP_ENV=production
             - APP_KEY=${APP_KEY}
+            - APP_DEBUG=false
+            - APP_URL=${APP_URL:-http://localhost}
             - DB_CONNECTION=pgsql
             - DB_HOST=postgres
+            - DB_PORT=5432
             - DB_DATABASE=${DB_DATABASE}
             - DB_USERNAME=${DB_USERNAME}
             - DB_PASSWORD=${DB_PASSWORD}
+            - REDIS_CLIENT=predis
             - REDIS_HOST=redis
+            - REDIS_PORT=6379
+            - REDIS_PASSWORD=null
             - QUEUE_CONNECTION=redis
+            - LOG_CHANNEL=stack
         volumes:
             - storage_data:/var/www/html/storage
             - bootstrap_cache:/var/www/html/bootstrap/cache
@@ -143,15 +157,23 @@ services:
         restart: unless-stopped
         command: sh -c "while true; do php artisan schedule:run --verbose --no-interaction && sleep 60; done"
         environment:
+            - APP_NAME=IPTVProvider
             - APP_ENV=production
             - APP_KEY=${APP_KEY}
+            - APP_DEBUG=false
+            - APP_URL=${APP_URL:-http://localhost}
             - DB_CONNECTION=pgsql
             - DB_HOST=postgres
+            - DB_PORT=5432
             - DB_DATABASE=${DB_DATABASE}
             - DB_USERNAME=${DB_USERNAME}
             - DB_PASSWORD=${DB_PASSWORD}
+            - REDIS_CLIENT=predis
             - REDIS_HOST=redis
+            - REDIS_PORT=6379
+            - REDIS_PASSWORD=null
             - QUEUE_CONNECTION=redis
+            - LOG_CHANNEL=stack
         volumes:
             - storage_data:/var/www/html/storage
             - bootstrap_cache:/var/www/html/bootstrap/cache
