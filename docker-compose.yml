@@ -28,11 +28,11 @@ services:
             redis:
                 condition: service_started
         healthcheck:
-            test: ["CMD", "php-fpm", "-t"]
-            interval: 10s
-            timeout: 3s
-            retries: 3
-            start_period: 40s
+            test: ["CMD-SHELL", "pgrep -x php-fpm > /dev/null || exit 1"]
+            interval: 15s
+            timeout: 5s
+            retries: 5
+            start_period: 120s
         networks:
             - iptv_network
 

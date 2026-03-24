@@ -46,10 +46,9 @@ if [ $DB_READY -eq 0 ]; then
 fi
 echo ""
 
-# Composer autoload optimization
-echo "3. Optimizing autoloader..."
-run_cmd "Running composer dump-autoload" "composer dump-autoload --optimize --no-dev --no-interaction"
-echo ""
+# NOTE: composer dump-autoload is intentionally skipped here.
+# It was already run during `docker build` (RUN composer install).
+# Running it again at container start is slow and unnecessary.
 
 # Clear caches
 echo "4. Clearing caches..."
@@ -77,8 +76,8 @@ if [ $DB_READY -eq 1 ]; then
     run_cmd "Running migrations" "php artisan migrate --force"
     echo ""
 
-    echo "8. Seeding admin user..."
-    run_cmd "Running AdminSeeder" "php artisan db:seed --class=AdminSeeder --force"
+    echo "8. Seeding admin user (first run only)..."
+    run_cmd "Running AdminSeeder" "php artisan db:seed --class=AdminSeeder --force 2>&1 | grep -v 'already exists' || true"
     echo ""
 else
     echo "7. Skipping migrations (database not ready)"
