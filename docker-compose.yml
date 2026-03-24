@@ -37,20 +37,22 @@ services:
             - iptv_network
 
     nginx:
-        image: nginx:alpine
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: nginx        # <-- use the nginx stage
         container_name: iptv_nginx
         restart: unless-stopped
         expose:
             - "80"
         volumes:
-            - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
             - storage_data:/var/www/html/storage
             - bootstrap_cache:/var/www/html/bootstrap/cache
         depends_on:
             app:
                 condition: service_healthy
         healthcheck:
-            test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+            test: [ "CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/" ]
             interval: 10s
             timeout: 3s
             retries: 3

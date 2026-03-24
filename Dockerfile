@@ -1,4 +1,4 @@
-FROM php:8.3-fpm-alpine
+FROM php:8.3-fpm-alpine AS app
 
 # Install dependencies
 RUN apk add --no-cache \
@@ -36,7 +36,7 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www/html
 
-#  Copy composer files
+# Copy composer files
 COPY composer.json composer.lock ./
 
 # Install PHP dependencies (skip scripts - will run in entrypoint)
@@ -46,7 +46,8 @@ RUN composer install --no-dev --no-scripts --no-interaction --prefer-dist
 COPY . .
 
 # Set permissions
-RUN chown -R www-data:www-data storage bootstrap/cache
+RUN chown -R www-data:www-data storage bootstrap/cache \
+    && chmod -R 775 storage bootstrap/cache
 
 # Copy and set entrypoint
 COPY docker/entrypoint.sh /entrypoint.sh
@@ -54,3 +55,14 @@ RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["php-fpm"]
+
+# -----------------------------------------------
+# Nginx stage - copies only public/ from app stage
+# -----------------------------------------------
+FROM nginx:alpine AS nginx
+
+# Copy public assets from app stage
+COPY --from=app /var/www/html/public /var/www/html/public
+
+# Copy nginx config
+COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf
