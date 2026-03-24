@@ -66,3 +66,6 @@ COPY --from=app /var/www/html/public /var/www/html/public
 
 # Copy nginx config
 COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf
+
+# Explicitly start nginx in foreground
+CMD ["nginx", "-g", "daemon off;"]

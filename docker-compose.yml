@@ -54,7 +54,7 @@ services:
             interval: 10s
             timeout: 3s
             retries: 3
-            start_period: 10s
+            start_period: 30s
         networks:
             - iptv_network
         labels:
@@ -110,6 +110,7 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
+            target: app
         restart: unless-stopped
         command: php artisan queue:work --sleep=3 --tries=3
         environment:
@@ -127,7 +128,7 @@ services:
             - bootstrap_cache:/var/www/html/bootstrap/cache
         depends_on:
             app:
-                condition: service_healthy
+                condition: service_started
         networks:
             - iptv_network
 
@@ -135,6 +136,7 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
+            target: app
         restart: unless-stopped
         command: sh -c "while true; do php artisan schedule:run --verbose --no-interaction && sleep 60; done"
         environment:
@@ -152,7 +154,7 @@ services:
             - bootstrap_cache:/var/www/html/bootstrap/cache
         depends_on:
             app:
-                condition: service_healthy
+                condition: service_started
         networks:
             - iptv_network
 
