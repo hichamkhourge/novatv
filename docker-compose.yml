@@ -71,11 +71,26 @@ services:
             - traefik.enable=true
             - traefik.docker.network=dokploy-network
 
-            - traefik.http.routers.iptv.rule=Host(`novatv.novadevlabs.com`)
-            - traefik.http.routers.iptv.entrypoints=websecure
-            - traefik.http.routers.iptv.tls.certresolver=letsencrypt
+            # Main Laravel app
+            - traefik.http.routers.novatv.rule=Host(`novatv.novadevlabs.com`) && PathPrefix(`/`)
+            - traefik.http.routers.novatv.entrypoints=websecure
+            - traefik.http.routers.novatv.tls=true
+            - traefik.http.routers.novatv.tls.certresolver=letsencrypt
+            - traefik.http.services.novatv.loadbalancer.server.port=80
 
-            - traefik.http.services.iptv.loadbalancer.server.port=80
+            # Optional HTTP → HTTPS redirect
+            - traefik.http.routers.novatv-http.rule=Host(`novatv.novadevlabs.com`)
+            - traefik.http.routers.novatv-http.entrypoints=web
+            - traefik.http.routers.novatv-http.middlewares=https-redirect
+            - traefik.http.middlewares.https-redirect.redirectscheme.scheme=https
+            - traefik.http.middlewares.https-redirect.redirectscheme.permanent=true
+
+            # Nginx test endpoint (bypasses Laravel)
+            - traefik.http.routers.nginx-test.rule=Host(`novatv.novadevlabs.com`) && Path(`/nginx-test`)
+            - traefik.http.routers.nginx-test.entrypoints=websecure
+            - traefik.http.routers.nginx-test.tls=true
+            - traefik.http.routers.nginx-test.tls.certresolver=letsencrypt
+            - traefik.http.services.nginx-test.loadbalancer.server.port=80
 
     postgres:
         image: postgres:16-alpine
