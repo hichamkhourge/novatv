@@ -3,7 +3,6 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
-        container_name: iptv_app
         restart: unless-stopped
         environment:
             - APP_ENV=production
@@ -17,7 +16,7 @@ services:
             - REDIS_HOST=redis
             - REDIS_PORT=6379
             - CACHE_DRIVER=redis
-            - SESSION_DRIVER=file
+            - SESSION_DRIVER=redis
             - QUEUE_CONNECTION=redis
         volumes:
             - storage_data:/var/www/html/storage
@@ -41,7 +40,6 @@ services:
             context: .
             dockerfile: Dockerfile
             target: nginx        # <-- use the nginx stage
-        container_name: iptv_nginx
         restart: unless-stopped
         expose:
             - "80"
@@ -60,13 +58,29 @@ services:
         networks:
             - iptv_network
         labels:
+            # Enable Traefik
             - "traefik.enable=true"
+
+            # HTTPS Router
             - "traefik.http.routers.iptv.rule=Host(`${DOMAIN:-localhost}`)"
+            - "traefik.http.routers.iptv.entrypoints=websecure"
+            - "traefik.http.routers.iptv.tls=true"
+            - "traefik.http.routers.iptv.tls.certresolver=letsencrypt"
+
+            # HTTP Router (for redirect)
+            - "traefik.http.routers.iptv-http.rule=Host(`${DOMAIN:-localhost}`)"
+            - "traefik.http.routers.iptv-http.entrypoints=web"
+            - "traefik.http.routers.iptv-http.middlewares=https-redirect"
+
+            # HTTPS Redirect Middleware
+            - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
+            - "traefik.http.middlewares.https-redirect.redirectscheme.permanent=true"
+
+            # Service
             - "traefik.http.services.iptv.loadbalancer.server.port=80"
 
     postgres:
         image: postgres:16-alpine
-        container_name: iptv_postgres
         restart: unless-stopped
         environment:
             POSTGRES_DB: ${DB_DATABASE}
@@ -85,7 +99,6 @@ services:
 
     redis:
         image: redis:7-alpine
-        container_name: iptv_redis
         restart: unless-stopped
         command: redis-server --appendonly yes
         volumes:
@@ -97,7 +110,6 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
-        container_name: iptv_queue
         restart: unless-stopped
         command: php artisan queue:work --sleep=3 --tries=3
         environment:
@@ -123,7 +135,6 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
-        container_name: iptv_scheduler
         restart: unless-stopped
         command: sh -c "while true; do php artisan schedule:run --verbose --no-interaction && sleep 60; done"
         environment:
