@@ -71,21 +71,21 @@ services:
             - traefik.enable=true
             - traefik.docker.network=dokploy-network
 
-            # Main Laravel app
-            - traefik.http.routers.novatv.rule=Host(`novatv.novadevlabs.com`) && PathPrefix(`/`)
-            - traefik.http.routers.novatv.entrypoints=websecure
-            - traefik.http.routers.novatv.tls=true
-            - traefik.http.routers.novatv.tls.certresolver=letsencrypt
-            - traefik.http.services.novatv.loadbalancer.server.port=80
+            # Main Laravel site
+            - traefik.http.routers.laravel.rule=Host(`novatv.novadevlabs.com`) && PathPrefix(`/`)
+            - traefik.http.routers.laravel.entrypoints=websecure
+            - traefik.http.routers.laravel.tls=true
+            - traefik.http.routers.laravel.tls.certresolver=letsencrypt
+            - traefik.http.services.laravel.loadbalancer.server.port=80
 
-            # Optional HTTP → HTTPS redirect
-            - traefik.http.routers.novatv-http.rule=Host(`novatv.novadevlabs.com`)
-            - traefik.http.routers.novatv-http.entrypoints=web
-            - traefik.http.routers.novatv-http.middlewares=https-redirect
+            # Redirect HTTP -> HTTPS
+            - traefik.http.routers.laravel-http.rule=Host(`novatv.novadevlabs.com`)
+            - traefik.http.routers.laravel-http.entrypoints=web
+            - traefik.http.routers.laravel-http.middlewares=https-redirect
             - traefik.http.middlewares.https-redirect.redirectscheme.scheme=https
             - traefik.http.middlewares.https-redirect.redirectscheme.permanent=true
 
-            # Nginx test endpoint (bypasses Laravel)
+            # nginx-test router (bypasses Laravel)
             - traefik.http.routers.nginx-test.rule=Host(`novatv.novadevlabs.com`) && Path(`/nginx-test`)
             - traefik.http.routers.nginx-test.entrypoints=websecure
             - traefik.http.routers.nginx-test.tls=true
