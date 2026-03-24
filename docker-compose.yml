@@ -145,6 +145,8 @@ services:
       - .:/var/www/html
       - /var/www/html/vendor
       - storage_data:/var/www/html/storage
+      - bootstrap_cache:/var/www/html/bootstrap/cache
+
     depends_on:
       app:
         condition: service_healthy
