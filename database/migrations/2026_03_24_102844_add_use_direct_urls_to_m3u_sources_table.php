@@ -11,9 +11,11 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('m3u_sources', function (Blueprint $table) {
-            $table->boolean('use_direct_urls')->default(false)->after('is_active');
-        });
+        if (!Schema::hasColumn('m3u_sources', 'use_direct_urls')) {
+            Schema::table('m3u_sources', function (Blueprint $table) {
+                $table->boolean('use_direct_urls')->default(false)->after('is_active');
+            });
+        }
     }
 
     /**
@@ -21,8 +23,10 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('m3u_sources', function (Blueprint $table) {
-            $table->dropColumn('use_direct_urls');
-        });
+        if (Schema::hasColumn('m3u_sources', 'use_direct_urls')) {
+            Schema::table('m3u_sources', function (Blueprint $table) {
+                $table->dropColumn('use_direct_urls');
+            });
+        }
     }
 };

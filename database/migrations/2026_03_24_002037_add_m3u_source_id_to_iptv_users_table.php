@@ -11,13 +11,16 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('iptv_users', function (Blueprint $table) {
-            $table->foreignId('m3u_source_id')
-                ->nullable()
-                ->after('package_id')
-                ->constrained('m3u_sources')
-                ->nullOnDelete();
-        });
+        // Check if column already exists before adding it
+        if (!Schema::hasColumn('iptv_users', 'm3u_source_id')) {
+            Schema::table('iptv_users', function (Blueprint $table) {
+                $table->foreignId('m3u_source_id')
+                    ->nullable()
+                    ->after('package_id')
+                    ->constrained('m3u_sources')
+                    ->nullOnDelete();
+            });
+        }
     }
 
     /**
@@ -25,9 +28,11 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('iptv_users', function (Blueprint $table) {
-            $table->dropForeign(['m3u_source_id']);
-            $table->dropColumn('m3u_source_id');
-        });
+        if (Schema::hasColumn('iptv_users', 'm3u_source_id')) {
+            Schema::table('iptv_users', function (Blueprint $table) {
+                $table->dropForeign(['m3u_source_id']);
+                $table->dropColumn('m3u_source_id');
+            });
+        }
     }
 };
