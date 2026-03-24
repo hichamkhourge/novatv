@@ -3,6 +3,7 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
+            target: app
         restart: unless-stopped
         environment:
             - APP_ENV=production
@@ -27,9 +28,9 @@ services:
             redis:
                 condition: service_started
         healthcheck:
-            test: ["CMD-SHELL", "pgrep -x php-fpm > /dev/null || exit 1"]
+            test: ["CMD-SHELL", "php-fpm -t || exit 1"]
             interval: 15s
-            timeout: 5s
+            timeout: 10s
             retries: 5
             start_period: 120s
         networks:
