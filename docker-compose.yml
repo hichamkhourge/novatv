@@ -41,6 +41,8 @@ services:
             start_period: 120s
         networks:
             - iptv_network
+        labels:
+            - traefik.enable=true
 
     nginx:
         build:
@@ -65,6 +67,15 @@ services:
         networks:
             - iptv_network
             - dokploy-network
+        labels:
+            - traefik.enable=true
+            - traefik.docker.network=dokploy-network
+
+            - traefik.http.routers.iptv.rule=Host(`novatv.novadevlabs.com`)
+            - traefik.http.routers.iptv.entrypoints=websecure
+            - traefik.http.routers.iptv.tls.certresolver=letsencrypt
+
+            - traefik.http.services.iptv.loadbalancer.server.port=80
 
     postgres:
         image: postgres:16-alpine
