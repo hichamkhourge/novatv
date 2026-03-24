@@ -1,193 +1,154 @@
-# Docker Compose configuration for IPTV Provider
-#
-# DEPLOYMENT OPTIONS:
-#
-# 1. Dokploy / Traefik (Production):
-#    - Use this file as-is (no port binding)
-#    - Dokploy's Traefik handles external access
-#    - Set DOMAIN environment variable to your domain
-#    - Command: docker-compose up -d
-#
-# 2. Local Development:
-#    - Use with docker-compose.local.yml to expose ports
-#    - Command: docker-compose -f docker-compose.yml -f docker-compose.local.yml up -d
-#    - Access at: http://localhost:8080
-#
-# 3. Standalone Server:
-#    - Uncomment the "ports" section in nginx service below
-#    - Configure your own reverse proxy to point to APP_PORT
-#
-# REQUIRED ENVIRONMENT VARIABLES:
-# - APP_NAME: Application name (NO QUOTES! e.g., IPTVProvider)
-# - APP_KEY: Laravel application key
-# - APP_DEBUG: Set to false in production
-# - APP_URL: Full application URL (e.g., https://novatv.novadevlabs.com)
-# - DB_DATABASE, DB_USERNAME, DB_PASSWORD: Database credentials
-# - DOMAIN: Domain name for Traefik routing (for Dokploy)
-
-version: '3.8'
 services:
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: iptv_app
-    restart: unless-stopped
-    environment:
-      - APP_ENV=production
-      - APP_KEY=${APP_KEY}
-      - DB_CONNECTION=pgsql
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_DATABASE=${DB_DATABASE}
-      - DB_USERNAME=${DB_USERNAME}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - CACHE_DRIVER=redis
-      - SESSION_DRIVER=file
-      - QUEUE_CONNECTION=redis
-    volumes:
-      - .:/var/www/html
-      - /var/www/html/vendor
-      - storage_data:/var/www/html/storage
-      - bootstrap_cache:/var/www/html/bootstrap/cache
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    healthcheck:
-      test: ["CMD", "php-fpm", "-t"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 40s
-    networks:
-      - iptv_network
+    app:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: iptv_app
+        restart: unless-stopped
+        environment:
+            - APP_ENV=production
+            - APP_KEY=${APP_KEY}
+            - DB_CONNECTION=pgsql
+            - DB_HOST=postgres
+            - DB_PORT=5432
+            - DB_DATABASE=${DB_DATABASE}
+            - DB_USERNAME=${DB_USERNAME}
+            - DB_PASSWORD=${DB_PASSWORD}
+            - REDIS_HOST=redis
+            - REDIS_PORT=6379
+            - CACHE_DRIVER=redis
+            - SESSION_DRIVER=file
+            - QUEUE_CONNECTION=redis
+        volumes:
+            - storage_data:/var/www/html/storage
+            - bootstrap_cache:/var/www/html/bootstrap/cache
+        depends_on:
+            postgres:
+                condition: service_healthy
+            redis:
+                condition: service_started
+        healthcheck:
+            test: ["CMD", "php-fpm", "-t"]
+            interval: 10s
+            timeout: 3s
+            retries: 3
+            start_period: 40s
+        networks:
+            - iptv_network
 
-  nginx:
-    image: nginx:alpine
-    container_name: iptv_nginx
-    restart: unless-stopped
-    # For Dokploy/Traefik: Don't bind ports, use expose only
-    # For local dev: Uncomment the ports line below
-    # ports:
-    #   - "${APP_PORT:-8080}:80"
-    expose:
-      - "80"
-    volumes:
-      - .:/var/www/html
-      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
-      - storage_data:/var/www/html/storage
-    depends_on:
-      app:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 10s
-    networks:
-      - iptv_network
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.iptv.rule=Host(`${DOMAIN:-localhost}`)"
-      - "traefik.http.services.iptv.loadbalancer.server.port=80"
+    nginx:
+        image: nginx:alpine
+        container_name: iptv_nginx
+        restart: unless-stopped
+        expose:
+            - "80"
+        volumes:
+            - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+            - storage_data:/var/www/html/storage
+            - bootstrap_cache:/var/www/html/bootstrap/cache
+        depends_on:
+            app:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+            interval: 10s
+            timeout: 3s
+            retries: 3
+            start_period: 10s
+        networks:
+            - iptv_network
+        labels:
+            - "traefik.enable=true"
+            - "traefik.http.routers.iptv.rule=Host(`${DOMAIN:-localhost}`)"
+            - "traefik.http.services.iptv.loadbalancer.server.port=80"
 
-  postgres:
-    image: postgres:16-alpine
-    container_name: iptv_postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${DB_DATABASE}
-      POSTGRES_USER: ${DB_USERNAME}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${DB_DATABASE}"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-    networks:
-      - iptv_network
+    postgres:
+        image: postgres:16-alpine
+        container_name: iptv_postgres
+        restart: unless-stopped
+        environment:
+            POSTGRES_DB: ${DB_DATABASE}
+            POSTGRES_USER: ${DB_USERNAME}
+            POSTGRES_PASSWORD: ${DB_PASSWORD}
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${DB_DATABASE}"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+            start_period: 10s
+        networks:
+            - iptv_network
 
-  redis:
-    image: redis:7-alpine
-    container_name: iptv_redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-    volumes:
-      - redis_data:/data
-    networks:
-      - iptv_network
+    redis:
+        image: redis:7-alpine
+        container_name: iptv_redis
+        restart: unless-stopped
+        command: redis-server --appendonly yes
+        volumes:
+            - redis_data:/data
+        networks:
+            - iptv_network
 
-  queue:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: iptv_queue
-    restart: unless-stopped
-    command: php artisan queue:work --sleep=3 --tries=3
-    environment:
-      - APP_ENV=production
-      - APP_KEY=${APP_KEY}
-      - DB_CONNECTION=pgsql
-      - DB_HOST=postgres
-      - DB_DATABASE=${DB_DATABASE}
-      - DB_USERNAME=${DB_USERNAME}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - REDIS_HOST=redis
-      - QUEUE_CONNECTION=redis
-    volumes:
-      - .:/var/www/html
-      - /var/www/html/vendor
-      - storage_data:/var/www/html/storage
-      - bootstrap_cache:/var/www/html/bootstrap/cache
+    queue:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: iptv_queue
+        restart: unless-stopped
+        command: php artisan queue:work --sleep=3 --tries=3
+        environment:
+            - APP_ENV=production
+            - APP_KEY=${APP_KEY}
+            - DB_CONNECTION=pgsql
+            - DB_HOST=postgres
+            - DB_DATABASE=${DB_DATABASE}
+            - DB_USERNAME=${DB_USERNAME}
+            - DB_PASSWORD=${DB_PASSWORD}
+            - REDIS_HOST=redis
+            - QUEUE_CONNECTION=redis
+        volumes:
+            - storage_data:/var/www/html/storage
+            - bootstrap_cache:/var/www/html/bootstrap/cache
+        depends_on:
+            app:
+                condition: service_healthy
+        networks:
+            - iptv_network
 
-    depends_on:
-      app:
-        condition: service_healthy
-    networks:
-      - iptv_network
-
-  scheduler:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: iptv_scheduler
-    restart: unless-stopped
-    command: sh -c "while true; do php artisan schedule:run --verbose --no-interaction && sleep 60; done"
-    environment:
-      - APP_ENV=production
-      - APP_KEY=${APP_KEY}
-      - DB_CONNECTION=pgsql
-      - DB_HOST=postgres
-      - DB_DATABASE=${DB_DATABASE}
-      - DB_USERNAME=${DB_USERNAME}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - REDIS_HOST=redis
-      - QUEUE_CONNECTION=redis
-    volumes:
-      - .:/var/www/html
-      - /var/www/html/vendor
-      - storage_data:/var/www/html/storage
-      - bootstrap_cache:/var/www/html/bootstrap/cache
-    depends_on:
-      app:
-        condition: service_healthy
-    networks:
-      - iptv_network
+    scheduler:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: iptv_scheduler
+        restart: unless-stopped
+        command: sh -c "while true; do php artisan schedule:run --verbose --no-interaction && sleep 60; done"
+        environment:
+            - APP_ENV=production
+            - APP_KEY=${APP_KEY}
+            - DB_CONNECTION=pgsql
+            - DB_HOST=postgres
+            - DB_DATABASE=${DB_DATABASE}
+            - DB_USERNAME=${DB_USERNAME}
+            - DB_PASSWORD=${DB_PASSWORD}
+            - REDIS_HOST=redis
+            - QUEUE_CONNECTION=redis
+        volumes:
+            - storage_data:/var/www/html/storage
+            - bootstrap_cache:/var/www/html/bootstrap/cache
+        depends_on:
+            app:
+                condition: service_healthy
+        networks:
+            - iptv_network
 
 volumes:
-  postgres_data:
-  redis_data:
-  storage_data:
-  bootstrap_cache:
+    postgres_data:
+    redis_data:
+    storage_data:
+    bootstrap_cache:
 
 networks:
-  iptv_network:
-    driver: bridge
+    iptv_network:
+        driver: bridge
