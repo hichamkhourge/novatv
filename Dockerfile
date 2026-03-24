@@ -57,15 +57,19 @@ ENTRYPOINT ["/entrypoint.sh"]
 CMD ["php-fpm"]
 
 # -----------------------------------------------
-# Nginx stage - copies only public/ from app stage
+# Nginx stage - copies full Laravel app from app stage
 # -----------------------------------------------
 FROM nginx:alpine AS nginx
 
-# Copy public assets from app stage
-COPY --from=app /var/www/html/public /var/www/html/public
+# Copy entire application from app stage
+# Laravel's public/index.php needs vendor/, bootstrap/, and storage/ to work
+COPY --from=app /var/www/html /var/www/html
 
 # Copy nginx config
 COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf
+
+# Create nginx user and set permissions
+RUN chown -R nginx:nginx /var/www/html
 
 # Explicitly start nginx in foreground
 CMD ["nginx", "-g", "daemon off;"]
