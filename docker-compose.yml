@@ -42,8 +42,6 @@ services:
             dockerfile: Dockerfile
             target: nginx        # <-- use the nginx stage
         restart: unless-stopped
-        ports:
-            - "80:80"
         expose:
             - "80"
         volumes:
@@ -60,9 +58,11 @@ services:
             start_period: 30s
         networks:
             - iptv_network
+            - dokploy-network
         labels:
             # Enable Traefik
             - "traefik.enable=true"
+            - "traefik.docker.network=dokploy-network"
 
             # HTTPS Router
             - "traefik.http.routers.iptv.rule=Host(`${DOMAIN:-localhost}`)"
@@ -170,3 +170,5 @@ volumes:
 networks:
     iptv_network:
         driver: bridge
+    dokploy-network:
+        external: true
