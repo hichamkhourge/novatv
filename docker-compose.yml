@@ -1,16 +1,29 @@
 # Docker Compose configuration for IPTV Provider
 #
-# Deployment options:
-# 1. Local development: docker-compose up -d
-# 2. Dokploy: Handles reverse proxy automatically
-# 3. Custom server: Configure reverse proxy (nginx/traefik) to point to port ${APP_PORT}
+# DEPLOYMENT OPTIONS:
 #
-# Required environment variables:
+# 1. Dokploy / Traefik (Production):
+#    - Use this file as-is (no port binding)
+#    - Dokploy's Traefik handles external access
+#    - Set DOMAIN environment variable to your domain
+#    - Command: docker-compose up -d
+#
+# 2. Local Development:
+#    - Use with docker-compose.local.yml to expose ports
+#    - Command: docker-compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#    - Access at: http://localhost:8080
+#
+# 3. Standalone Server:
+#    - Uncomment the "ports" section in nginx service below
+#    - Configure your own reverse proxy to point to APP_PORT
+#
+# REQUIRED ENVIRONMENT VARIABLES:
+# - APP_NAME: Application name (NO QUOTES! e.g., IPTVProvider)
 # - APP_KEY: Laravel application key
-# - DB_DATABASE, DB_USERNAME, DB_PASSWORD: Database credentials
+# - APP_DEBUG: Set to false in production
 # - APP_URL: Full application URL (e.g., https://novatv.novadevlabs.com)
-# - APP_PORT: Port for nginx to listen on (default: 80)
-# - DOMAIN: Domain name for Traefik routing (optional, for Dokploy)
+# - DB_DATABASE, DB_USERNAME, DB_PASSWORD: Database credentials
+# - DOMAIN: Domain name for Traefik routing (for Dokploy)
 
 version: '3.8'
 services:
@@ -56,8 +69,10 @@ services:
     image: nginx:alpine
     container_name: iptv_nginx
     restart: unless-stopped
-    ports:
-      - "${APP_PORT:-80}:80"
+    # For Dokploy/Traefik: Don't bind ports, use expose only
+    # For local dev: Uncomment the ports line below
+    # ports:
+    #   - "${APP_PORT:-8080}:80"
     expose:
       - "80"
     volumes:

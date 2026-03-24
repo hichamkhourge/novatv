@@ -159,16 +159,57 @@ Configured in `bootstrap/app.php`:
 
 ## Deployment
 
-### Docker (Recommended)
+### Dokploy / Traefik (Recommended for Production)
+
+The project is optimized for Dokploy deployment with automatic SSL and reverse proxy:
+
+**Environment Variables:**
+```env
+APP_NAME=IPTVProvider          # NO QUOTES!
+APP_ENV=production
+APP_DEBUG=false
+APP_URL=https://your-domain.com
+DOMAIN=your-domain.com
+DB_DATABASE=iptv
+DB_USERNAME=iptv_user
+DB_PASSWORD=secure_password_here
+```
+
+**Important Notes:**
+- ✅ Do NOT add quotes to `APP_NAME` (causes parsing errors)
+- ✅ Set `APP_DEBUG=false` in production
+- ✅ Dokploy handles reverse proxy automatically (no need to expose ports)
+- ✅ Traefik labels are pre-configured in `docker-compose.yml`
+
+**Deployment Steps:**
+1. Connect Dokploy to your GitHub repository
+2. Set environment variables in Dokploy dashboard
+3. Deploy - Dokploy will handle SSL, reverse proxy, and container orchestration
+
+### Local Development
+
+For local development with port binding:
+
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.local.yml up -d
+```
+
+Access at: `http://localhost:8080/admin`
+
+### Docker (Standalone Server)
 
 The project includes a complete Docker setup with:
-- PHP 8.3-FPM
-- PostgreSQL 16
+- PHP 8.3-FPM with health checks
+- PostgreSQL 16 with automatic readiness checks
 - Redis 7
-- Nginx
+- Nginx with automatic startup dependency management
 - Queue worker
 - Scheduler
 
+**For standalone deployment (non-Dokploy):**
+
+1. Uncomment the `ports` section in `docker-compose.yml` (nginx service)
+2. Run:
 ```bash
 docker-compose up -d
 ```
