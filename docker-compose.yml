@@ -65,28 +65,6 @@ services:
         networks:
             - iptv_network
             - dokploy-network
-        labels:
-            # Enable Traefik
-            - "traefik.enable=true"
-            - "traefik.docker.network=dokploy-network"
-
-            # HTTPS Router
-            - "traefik.http.routers.iptv.rule=Host(`${DOMAIN:-localhost}`)"
-            - "traefik.http.routers.iptv.entrypoints=websecure"
-            - "traefik.http.routers.iptv.tls=true"
-            - "traefik.http.routers.iptv.tls.certresolver=letsencrypt"
-
-            # HTTP Router (for redirect)
-            - "traefik.http.routers.iptv-http.rule=Host(`${DOMAIN:-localhost}`)"
-            - "traefik.http.routers.iptv-http.entrypoints=web"
-            - "traefik.http.routers.iptv-http.middlewares=https-redirect"
-
-            # HTTPS Redirect Middleware
-            - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
-            - "traefik.http.middlewares.https-redirect.redirectscheme.permanent=true"
-
-            # Service
-            - "traefik.http.services.iptv.loadbalancer.server.port=80"
 
     postgres:
         image: postgres:16-alpine
