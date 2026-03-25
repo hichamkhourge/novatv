@@ -26,10 +26,31 @@ class M3uSourceResource extends Resource
                 Forms\Components\TextInput::make('name')
                     ->required()
                     ->maxLength(255),
-                Forms\Components\Textarea::make('url')
+                Forms\Components\Radio::make('source_type')
+                    ->label('Source Type')
+                    ->options([
+                        'url' => 'URL (Fetch from external source)',
+                        'file' => 'File (Upload M3U file)',
+                    ])
+                    ->default('url')
                     ->required()
+                    ->live()
+                    ->columnSpanFull(),
+                Forms\Components\Textarea::make('url')
                     ->maxLength(65535)
                     ->label('M3U URL')
+                    ->required(fn (Forms\Get $get): bool => $get('source_type') === 'url')
+                    ->visible(fn (Forms\Get $get): bool => $get('source_type') === 'url')
+                    ->columnSpanFull(),
+                Forms\Components\FileUpload::make('file_path')
+                    ->label('M3U File')
+                    ->disk('local')
+                    ->directory('m3u_files')
+                    ->acceptedFileTypes(['application/x-mpegurl', 'audio/x-mpegurl', 'text/plain', '.m3u', '.m3u8'])
+                    ->maxSize(10240)
+                    ->required(fn (Forms\Get $get): bool => $get('source_type') === 'file')
+                    ->visible(fn (Forms\Get $get): bool => $get('source_type') === 'file')
+                    ->helperText('Upload an M3U or M3U8 file (max 10MB)')
                     ->columnSpanFull(),
                 Forms\Components\Toggle::make('is_active')
                     ->default(true)
@@ -48,9 +69,25 @@ class M3uSourceResource extends Resource
                 Tables\Columns\TextColumn::make('name')
                     ->searchable()
                     ->sortable(),
+                Tables\Columns\TextColumn::make('source_type')
+                    ->label('Type')
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'url' => 'info',
+                        'file' => 'success',
+                        default => 'gray',
+                    })
+                    ->formatStateUsing(fn (string $state): string => strtoupper($state))
+                    ->sortable(),
                 Tables\Columns\TextColumn::make('url')
                     ->limit(50)
-                    ->searchable(),
+                    ->searchable()
+                    ->placeholder('N/A'),
+                Tables\Columns\TextColumn::make('file_path')
+                    ->label('File')
+                    ->limit(30)
+                    ->placeholder('N/A')
+                    ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\IconColumn::make('is_active')
                     ->boolean()
                     ->sortable(),
