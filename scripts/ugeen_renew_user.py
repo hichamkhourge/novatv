@@ -627,7 +627,64 @@ def perform_login_with_retries(driver, wait, config, retry_count=0):
             log("No blocking reCAPTCHA detected")
 
         log('Clicking login button...')
-        login_button = driver.find_element(By.CSS_SELECTOR, '#submit')
+        login_button = None
+
+        # Try multiple selectors for login button
+        try:
+            login_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#submit')))
+            log("Found login button with selector: #submit", 'DEBUG')
+        except:
+            try:
+                login_button = driver.find_element(By.CSS_SELECTOR, 'button[type="submit"]')
+                log("Found login button with selector: button[type=\"submit\"]", 'DEBUG')
+            except:
+                try:
+                    login_button = driver.find_element(By.XPATH, '//button[contains(text(), "Login") or contains(text(), "Sign in") or contains(text(), "Log in")]')
+                    log("Found login button by text", 'DEBUG')
+                except:
+                    try:
+                        login_button = driver.find_element(By.CSS_SELECTOR, 'button.btn-primary')
+                        log("Found login button with selector: button.btn-primary", 'DEBUG')
+                    except:
+                        try:
+                            login_button = driver.find_element(By.CSS_SELECTOR, 'input[type="submit"]')
+                            log("Found login button with selector: input[type=\"submit\"]", 'DEBUG')
+                        except:
+                            pass
+
+        if not login_button:
+            log("Login button not found with any selector!", 'ERROR')
+
+            # Debug: List all buttons on the page
+            try:
+                all_buttons = driver.find_elements(By.TAG_NAME, 'button')
+                all_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="submit"]')
+                log(f"Found {len(all_buttons)} buttons and {len(all_inputs)} submit inputs on page", 'DEBUG')
+
+                for idx, btn in enumerate(all_buttons):
+                    btn_id = btn.get_attribute('id') or 'no-id'
+                    btn_class = btn.get_attribute('class') or 'no-class'
+                    btn_text = btn.text or 'no-text'
+                    btn_type = btn.get_attribute('type') or 'no-type'
+                    log(f"Button {idx}: id='{btn_id}', class='{btn_class}', type='{btn_type}', text='{btn_text}'", 'DEBUG')
+
+                for idx, inp in enumerate(all_inputs):
+                    inp_id = inp.get_attribute('id') or 'no-id'
+                    inp_class = inp.get_attribute('class') or 'no-class'
+                    inp_value = inp.get_attribute('value') or 'no-value'
+                    log(f"Submit input {idx}: id='{inp_id}', class='{inp_class}', value='{inp_value}'", 'DEBUG')
+            except Exception as e:
+                log(f"Error listing buttons: {e}", 'DEBUG')
+
+            # Take screenshot for debugging
+            try:
+                driver.save_screenshot('/tmp/login_button_not_found.png')
+                log("Screenshot saved to /tmp/login_button_not_found.png", 'DEBUG')
+            except:
+                pass
+
+            raise Exception("Login button not found")
+
         login_button.click()
 
         log('Waiting for authentication...')
