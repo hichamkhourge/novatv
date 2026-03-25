@@ -12,6 +12,7 @@ use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
+use Illuminate\Support\Facades\Crypt;
 
 class IptvUserResource extends Resource
 {
@@ -66,7 +67,57 @@ class IptvUserResource extends Resource
                             ])
                             ->default('none')
                             ->required()
+                            ->live()
                             ->helperText('Select the source provider for subscription automation'),
+                        Forms\Components\TextInput::make('provider_username')
+                            ->label('Provider Username/Email')
+                            ->helperText('The email or username used to login to the provider panel')
+                            ->visible(fn (Forms\Get $get): bool => in_array($get('provider_type'), ['ugeen', 'zazy', 'custom']))
+                            ->dehydrateStateUsing(fn ($state) => $state ? Crypt::encryptString($state) : null)
+                            ->afterStateHydrated(function (Forms\Components\TextInput $component, $state) {
+                                if ($state) {
+                                    try {
+                                        $component->state(Crypt::decryptString($state));
+                                    } catch (\Exception $e) {
+                                        $component->state('');
+                                    }
+                                }
+                            })
+                            ->password()
+                            ->revealable(),
+                        Forms\Components\TextInput::make('provider_password')
+                            ->label('Provider Password')
+                            ->helperText('The password used to login to the provider panel')
+                            ->visible(fn (Forms\Get $get): bool => in_array($get('provider_type'), ['ugeen', 'zazy', 'custom']))
+                            ->dehydrateStateUsing(fn ($state) => $state ? Crypt::encryptString($state) : null)
+                            ->afterStateHydrated(function (Forms\Components\TextInput $component, $state) {
+                                if ($state) {
+                                    try {
+                                        $component->state(Crypt::decryptString($state));
+                                    } catch (\Exception $e) {
+                                        $component->state('');
+                                    }
+                                }
+                            })
+                            ->password()
+                            ->revealable(),
+                        Forms\Components\KeyValue::make('provider_config')
+                            ->label('Additional Configuration')
+                            ->helperText('Provider-specific settings (e.g., package_id, api_key, etc.)')
+                            ->visible(fn (Forms\Get $get): bool => in_array($get('provider_type'), ['ugeen', 'zazy', 'custom']))
+                            ->keyLabel('Setting Key')
+                            ->valueLabel('Setting Value')
+                            ->default(['package_id' => '384']),
+                        Forms\Components\TextInput::make('script_path')
+                            ->label('Custom Script Path')
+                            ->helperText('Path to Python script (leave empty to use default for provider type)')
+                            ->visible(fn (Forms\Get $get): bool => $get('provider_type') === 'custom')
+                            ->placeholder('/path/to/script.py'),
+                        Forms\Components\Toggle::make('automation_enabled')
+                            ->label('Enable Automation')
+                            ->helperText('When enabled, users assigned to this source will have their subscriptions automatically renewed daily')
+                            ->visible(fn (Forms\Get $get): bool => in_array($get('provider_type'), ['ugeen', 'zazy', 'custom']))
+                            ->default(false),
                         Forms\Components\TextInput::make('url')
                             ->url()
                             ->maxLength(255)
