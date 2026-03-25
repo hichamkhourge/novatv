@@ -314,6 +314,7 @@ def solve_recaptcha_with_2captcha(driver, page_url):
             'method': 'userrecaptcha',
             'googlekey': sitekey,
             'pageurl': page_url,
+            'invisible': 1,  # Required for invisible reCAPTCHA v2
             'json': 1
         }
 
