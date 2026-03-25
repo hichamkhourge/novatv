@@ -83,6 +83,7 @@ def decrypt_laravel_value(encrypted_value):
 def get_db_connection():
     """Create database connection"""
     try:
+        log(f"Connecting to database: {DB_USERNAME}@{DB_HOST}:{DB_PORT}/{DB_DATABASE}", 'DEBUG')
         conn = psycopg2.connect(
             host=DB_HOST,
             port=DB_PORT,
@@ -90,21 +91,25 @@ def get_db_connection():
             user=DB_USERNAME,
             password=DB_PASSWORD
         )
+        log("Database connection successful", 'DEBUG')
         return conn
     except Exception as e:
         log(f"Database connection failed: {e}", 'ERROR')
+        log(f"Connection details - Host: {DB_HOST}, Port: {DB_PORT}, Database: {DB_DATABASE}, User: {DB_USERNAME}", 'ERROR')
         return None
 
 def fetch_user_and_source(user_id):
     """Fetch user and source data from database"""
     conn = get_db_connection()
     if not conn:
+        log("Cannot proceed without database connection", 'ERROR')
         return None, None
 
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         # Fetch user with source details
+        log(f"Querying database for user ID: {user_id}", 'DEBUG')
         cursor.execute("""
             SELECT
                 u.id as user_id,
@@ -122,6 +127,7 @@ def fetch_user_and_source(user_id):
         """, (user_id,))
 
         result = cursor.fetchone()
+        log(f"Query returned: {result is not None}", 'DEBUG')
         cursor.close()
         conn.close()
 
