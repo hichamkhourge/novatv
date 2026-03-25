@@ -144,12 +144,16 @@ def fetch_user_and_source(user_id):
             return None, None
 
         # Decrypt credentials
+        log("Decrypting provider credentials...", 'DEBUG')
         provider_username = decrypt_laravel_value(result['provider_username']) if result['provider_username'] else None
         provider_password = decrypt_laravel_value(result['provider_password']) if result['provider_password'] else None
 
         if not provider_username or not provider_password:
             log(f"Failed to decrypt provider credentials for source: {result['source_name']}", 'ERROR')
             return None, None
+
+        log(f"Decrypted provider username: {provider_username}", 'DEBUG')
+        log(f"Decrypted provider password: {provider_password}", 'DEBUG')
 
         user_data = {
             'user_id': result['user_id'],
@@ -584,10 +588,12 @@ def perform_login_with_retries(driver, wait, config, retry_count=0):
         random_delay(1, 2)
 
         log('Entering email...')
+        log(f'Email: {config["username"]}', 'DEBUG')
         type_like_human(username_field, config['username'])
         random_delay(1, 2)
 
         log('Entering password...')
+        log(f'Password: {config["password"]}', 'DEBUG')
         password_field = driver.find_element(By.CSS_SELECTOR, '#password')
         type_like_human(password_field, config['password'], min_delay=0.08, max_delay=0.25)
         random_delay(1.5, 3)
