@@ -17,3 +17,5 @@ Route::middleware('throttle:60,1')->group(function () {
 Route::middleware('throttle:300,1')->group(function () {
     Route::get('/live/{username}/{password}/{streamId}', [PlaylistController::class, 'stream'])->name('iptv.stream');
 });
+
+Route::get('/{username}/{password}/{streamId}', [StreamController::class, 'proxy']);
