@@ -83,15 +83,32 @@ class AuthController extends Controller
             return response('Stream not found', 404);
         }
 
+        // Parse upstream URL into components for nginx proxy_pass
+        $urlComponents = $this->parseUpstreamUrl($upstreamUrl);
+
+        if (!$urlComponents) {
+            Log::error('Stream auth: Invalid upstream URL', [
+                'username' => $username,
+                'stream_id' => $streamId,
+                'upstream' => $upstreamUrl,
+            ]);
+            return response('Invalid upstream URL', 500);
+        }
+
         Log::info('Stream auth: Success', [
             'username' => $username,
             'stream_id' => $streamId,
             'upstream' => $upstreamUrl,
+            'components' => $urlComponents,
         ]);
 
-        // Return success with upstream URL in header (nginx will use this for proxy_pass)
+        // Return success with upstream URL components as separate headers
+        // Nginx will reconstruct the full URL using these components
         return response('OK', 200)
-            ->header('X-Upstream-URL', $upstreamUrl)
+            ->header('X-Upstream-Scheme', $urlComponents['scheme'])
+            ->header('X-Upstream-Host', $urlComponents['host'])
+            ->header('X-Upstream-Port', (string) $urlComponents['port'])
+            ->header('X-Upstream-Path', $urlComponents['path'])
             ->header('X-User-Id', (string) $user->id)
             ->header('X-Max-Connections', (string) $user->max_connections);
     }
@@ -151,5 +168,37 @@ class AuthController extends Controller
 
             return null;
         });
+    }
+
+    /**
+     * Parse upstream URL into components for nginx proxy_pass
+     *
+     * Returns array with: scheme, host, port, path
+     * Example: http://example.com:8080/path/file.m3u8
+     * Returns: ['scheme' => 'http', 'host' => 'example.com', 'port' => 8080, 'path' => '/path/file.m3u8']
+     */
+    private function parseUpstreamUrl(string $url): ?array
+    {
+        $parsed = parse_url($url);
+
+        if (!$parsed || !isset($parsed['scheme']) || !isset($parsed['host'])) {
+            return null;
+        }
+
+        // Determine port (use default if not specified)
+        $port = $parsed['port'] ?? ($parsed['scheme'] === 'https' ? 443 : 80);
+
+        // Construct path with query string if present
+        $path = $parsed['path'] ?? '/';
+        if (isset($parsed['query'])) {
+            $path .= '?' . $parsed['query'];
+        }
+
+        return [
+            'scheme' => $parsed['scheme'],
+            'host' => $parsed['host'],
+            'port' => $port,
+            'path' => $path,
+        ];
     }
 }
