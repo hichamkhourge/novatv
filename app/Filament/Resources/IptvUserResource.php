@@ -56,6 +56,17 @@ class IptvUserResource extends Resource
                             ->default('url')
                             ->required()
                             ->live(),
+                        Forms\Components\Select::make('provider_type')
+                            ->label('Source Provider')
+                            ->options([
+                                'none' => 'None (No Automation)',
+                                'ugeen' => 'UGEEN',
+                                'zazy' => 'ZAZY',
+                                'custom' => 'Custom Script',
+                            ])
+                            ->default('none')
+                            ->required()
+                            ->helperText('Select the source provider for subscription automation'),
                         Forms\Components\TextInput::make('url')
                             ->url()
                             ->maxLength(255)
