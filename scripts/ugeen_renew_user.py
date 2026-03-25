@@ -602,9 +602,51 @@ def perform_login_with_retries(driver, wait, config, retry_count=0):
         move_mouse_randomly(driver)
         random_delay(1, 2)
 
-        log("Checking for reCAPTCHA...")
+        # Check for invisible reCAPTCHA (data-size="invisible")
+        log("Checking for invisible reCAPTCHA...")
+        has_invisible_recaptcha = False
+        try:
+            invisible_recaptcha = driver.find_element(By.CSS_SELECTOR, '.g-recaptcha[data-size="invisible"]')
+            if invisible_recaptcha:
+                has_invisible_recaptcha = True
+                log("Found invisible reCAPTCHA! Will solve before submission.", 'WARNING')
+        except:
+            pass
+
+        # Solve invisible reCAPTCHA proactively if present
+        if has_invisible_recaptcha:
+            log("Solving invisible reCAPTCHA with 2captcha...")
+            if solve_recaptcha_with_2captcha(driver, config['url']):
+                log("Invisible reCAPTCHA solved successfully!", 'INFO')
+                random_delay(2, 3)
+
+                # Submit form directly via JavaScript to bypass button's event.preventDefault()
+                log("Submitting form via JavaScript...")
+                driver.execute_script("""
+                    var form = document.getElementById('signin');
+                    if (form) {
+                        form.submit();
+                    }
+                """)
+
+                log('Form submitted, waiting for authentication...')
+                time.sleep(5)
+
+                # Check if login was successful
+                current_url = driver.current_url
+                if 'dashboard' in current_url or 'panel' in current_url or 'home' in current_url:
+                    log("Login successful!")
+                    return driver
+                else:
+                    log(f"Current URL after form submit: {current_url}", 'DEBUG')
+            else:
+                log("Failed to solve invisible reCAPTCHA", 'ERROR')
+                raise Exception("reCAPTCHA solving failed")
+
+        # Also check for visible/blocking reCAPTCHA
+        log("Checking for visible reCAPTCHA...")
         if detect_recaptcha(driver):
-            log("reCAPTCHA challenge is BLOCKING the page!", 'WARNING')
+            log("Visible reCAPTCHA challenge is BLOCKING the page!", 'WARNING')
 
             if solve_recaptcha_with_2captcha(driver, config['url']):
                 log("reCAPTCHA solved successfully with 2captcha!")
@@ -624,7 +666,12 @@ def perform_login_with_retries(driver, wait, config, retry_count=0):
                 else:
                     log("reCAPTCHA passed automatically!")
         else:
-            log("No blocking reCAPTCHA detected")
+            log("No visible reCAPTCHA detected")
+
+        # If we already submitted via JavaScript (for invisible reCAPTCHA), skip button click
+        if has_invisible_recaptcha:
+            log("Form already submitted via JavaScript, skipping button click")
+            return driver
 
         log('Clicking login button...')
         login_button = None
@@ -685,7 +732,36 @@ def perform_login_with_retries(driver, wait, config, retry_count=0):
 
             raise Exception("Login button not found")
 
-        login_button.click()
+        # Ensure button is visible and clickable
+        try:
+            log("Scrolling login button into view...", 'DEBUG')
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", login_button)
+            time.sleep(1)
+
+            # Check if button is displayed and enabled
+            is_displayed = login_button.is_displayed()
+            is_enabled = login_button.is_enabled()
+            log(f"Login button - displayed: {is_displayed}, enabled: {is_enabled}", 'DEBUG')
+
+            # Try regular click first
+            try:
+                login_button.click()
+                log("Login button clicked successfully", 'DEBUG')
+            except Exception as e:
+                log(f"Regular click failed: {e}, trying JavaScript click...", 'WARNING')
+                # Fallback to JavaScript click
+                driver.execute_script("arguments[0].click();", login_button)
+                log("JavaScript click executed", 'DEBUG')
+
+        except Exception as e:
+            log(f"Error clicking login button: {e}", 'ERROR')
+            # Take screenshot
+            try:
+                driver.save_screenshot('/tmp/login_button_click_failed.png')
+                log("Screenshot saved to /tmp/login_button_click_failed.png", 'DEBUG')
+            except:
+                pass
+            raise
 
         log('Waiting for authentication...')
         time.sleep(5)
