@@ -289,25 +289,46 @@ def create_stealth_driver(proxy=None, headless=USE_HEADLESS):
     ua = UserAgent()
     user_agent = ua.random
 
-    browser_path = None
-    search_paths = [
-        '/usr/bin/google-chrome',
-        '/usr/bin/google-chrome-stable',
-        '/usr/bin/chromium-browser',
-        '/usr/bin/chromium',
-        '/snap/bin/chromium',
-        '/usr/bin/chrome',
-        '/opt/google/chrome/chrome'
-    ]
+    # Check for Chrome binary from environment variable first
+    browser_path = os.getenv('CHROME_BIN')
+    if browser_path and os.path.exists(browser_path):
+        log(f"Using Chrome from CHROME_BIN env: {browser_path}", 'DEBUG')
+    else:
+        browser_path = None
+        search_paths = [
+            '/usr/bin/google-chrome',
+            '/usr/bin/google-chrome-stable',
+            '/usr/bin/chromium-browser',
+            '/usr/bin/chromium',
+            '/snap/bin/chromium',
+            '/usr/bin/chrome',
+            '/opt/google/chrome/chrome'
+        ]
 
-    for path in search_paths:
-        if os.path.exists(path) and os.path.isfile(path):
-            browser_path = path
-            log(f"Found Chrome at: {browser_path}", 'DEBUG')
-            break
+        for path in search_paths:
+            if os.path.exists(path) and os.path.isfile(path):
+                browser_path = path
+                log(f"Found Chrome at: {browser_path}", 'DEBUG')
+                break
 
     if not browser_path:
         log("Could not find Chrome binary, letting undetected-chromedriver auto-detect...", 'WARNING')
+
+    # Check for chromedriver from environment variable
+    chromedriver_path = os.getenv('CHROMEDRIVER_PATH')
+    if chromedriver_path and os.path.exists(chromedriver_path):
+        log(f"Using chromedriver from CHROMEDRIVER_PATH env: {chromedriver_path}", 'DEBUG')
+    else:
+        chromedriver_path = None
+        chromedriver_search_paths = [
+            '/usr/bin/chromedriver',
+            '/usr/local/bin/chromedriver',
+        ]
+        for path in chromedriver_search_paths:
+            if os.path.exists(path) and os.path.isfile(path):
+                chromedriver_path = path
+                log(f"Found chromedriver at: {chromedriver_path}", 'DEBUG')
+                break
 
     version_main = None
     if browser_path:
@@ -328,6 +349,8 @@ def create_stealth_driver(proxy=None, headless=USE_HEADLESS):
     options = uc.ChromeOptions()
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--disable-software-rasterizer')
 
     if headless:
         options.add_argument('--headless=new')
@@ -338,25 +361,52 @@ def create_stealth_driver(proxy=None, headless=USE_HEADLESS):
 
     try:
         log("Creating undetected-chromedriver instance...")
+        driver_kwargs = {
+            'options': options,
+            'use_subprocess': False
+        }
+
+        # Add browser path if found
         if browser_path:
-            driver = uc.Chrome(
-                browser_executable_path=browser_path,
-                options=options,
-                version_main=version_main,
-                use_subprocess=False
-            )
-        else:
-            driver = uc.Chrome(
-                options=options,
-                use_subprocess=False
-            )
+            driver_kwargs['browser_executable_path'] = browser_path
+
+        # Add chromedriver path if found (forces use of system chromedriver)
+        if chromedriver_path:
+            driver_kwargs['driver_executable_path'] = chromedriver_path
+            log(f"Using explicit chromedriver path: {chromedriver_path}", 'DEBUG')
+
+        # Add version if detected
+        if version_main:
+            driver_kwargs['version_main'] = version_main
+
+        driver = uc.Chrome(**driver_kwargs)
+
     except Exception as e:
         log(f"Driver creation failed: {e}", 'WARNING')
-        log("Trying with minimal configuration...")
-        options_minimal = uc.ChromeOptions()
-        options_minimal.add_argument('--no-sandbox')
-        options_minimal.add_argument('--disable-dev-shm-usage')
-        driver = uc.Chrome(options=options_minimal, use_subprocess=False)
+        log("Trying with minimal configuration and explicit paths...")
+
+        try:
+            options_minimal = uc.ChromeOptions()
+            options_minimal.add_argument('--no-sandbox')
+            options_minimal.add_argument('--disable-dev-shm-usage')
+            options_minimal.add_argument('--disable-gpu')
+
+            minimal_kwargs = {
+                'options': options_minimal,
+                'use_subprocess': False
+            }
+
+            # Force use of system chromedriver to avoid auto-download
+            if chromedriver_path:
+                minimal_kwargs['driver_executable_path'] = chromedriver_path
+            if browser_path:
+                minimal_kwargs['browser_executable_path'] = browser_path
+
+            driver = uc.Chrome(**minimal_kwargs)
+
+        except Exception as e2:
+            log(f"Minimal configuration also failed: {e2}", 'ERROR')
+            raise
 
     try:
         driver.execute_cdp_cmd('Network.setUserAgentOverride', {

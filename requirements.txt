@@ -2,11 +2,12 @@
 # Install with: pip3 install -r requirements.txt
 
 # Web automation and scraping
-undetected-chromedriver>=3.5.0
-selenium>=4.15.0
+# Pin to stable versions for Alpine Linux compatibility
+undetected-chromedriver==3.5.5
+selenium==4.16.0
 
 # HTTP requests
-requests>=2.31.0
+requests==2.31.0
 
 # Fake user agents for anti-detection
-fake-useragent>=1.4.0
+fake-useragent==1.4.0

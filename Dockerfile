@@ -62,7 +62,14 @@ RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
 
 # Set Chromium environment variables for undetected-chromedriver
 ENV CHROME_BIN=/usr/bin/chromium-browser \
-    CHROMEDRIVER_PATH=/usr/bin/chromedriver
+    CHROMEDRIVER_PATH=/usr/bin/chromedriver \
+    UC_DRIVER_CACHE=/tmp/uc_driver_cache
+
+# Create undetected-chromedriver cache directory with proper permissions
+RUN mkdir -p /tmp/uc_driver_cache \
+    && chmod 777 /tmp/uc_driver_cache \
+    && mkdir -p /tmp/iptv_sessions \
+    && chmod 777 /tmp/iptv_sessions
 
 # Set permissions
 RUN chown -R www-data:www-data storage bootstrap/cache \
