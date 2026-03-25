@@ -83,8 +83,21 @@ class AuthController extends Controller
             return response('Stream not found', 404);
         }
 
-        // Parse upstream URL into components for nginx proxy_pass
-        $urlComponents = $this->parseUpstreamUrl($upstreamUrl);
+        // Follow redirects to get final URL
+        // Many IPTV providers use 302 redirects to CDN/load balancers
+        $finalUrl = $this->followRedirects($upstreamUrl);
+
+        if (!$finalUrl) {
+            Log::error('Stream auth: Failed to resolve redirects', [
+                'username' => $username,
+                'stream_id' => $streamId,
+                'upstream' => $upstreamUrl,
+            ]);
+            return response('Failed to resolve stream URL', 500);
+        }
+
+        // Parse final URL into components for nginx proxy_pass
+        $urlComponents = $this->parseUpstreamUrl($finalUrl);
 
         if (!$urlComponents) {
             Log::error('Stream auth: Invalid upstream URL', [
@@ -98,7 +111,9 @@ class AuthController extends Controller
         Log::info('Stream auth: Success', [
             'username' => $username,
             'stream_id' => $streamId,
-            'upstream' => $upstreamUrl,
+            'upstream_original' => $upstreamUrl,
+            'upstream_final' => $finalUrl,
+            'redirected' => $upstreamUrl !== $finalUrl,
             'components' => $urlComponents,
         ]);
 
@@ -200,5 +215,113 @@ class AuthController extends Controller
             'port' => $port,
             'path' => $path,
         ];
+    }
+
+    /**
+     * Follow HTTP redirects to get the final URL
+     *
+     * Many IPTV providers use 302/301 redirects to CDN or load balancers.
+     * This method follows up to 5 redirects and returns the final direct URL.
+     *
+     * @param string $url Initial URL
+     * @return string|null Final URL after following redirects, or null on failure
+     */
+    private function followRedirects(string $url): ?string
+    {
+        $maxRedirects = 5;
+        $redirectCount = 0;
+        $currentUrl = $url;
+
+        try {
+            while ($redirectCount < $maxRedirects) {
+                // Make a HEAD request to check for redirects (faster than GET)
+                $response = \Illuminate\Support\Facades\Http::withOptions([
+                    'allow_redirects' => false,  // Don't follow automatically
+                    'timeout' => 5,
+                    'verify' => false,  // Disable SSL verification for self-signed certs
+                ])
+                ->head($currentUrl);
+
+                $statusCode = $response->status();
+
+                // If it's a redirect (301, 302, 303, 307, 308)
+                if (in_array($statusCode, [301, 302, 303, 307, 308])) {
+                    $location = $response->header('Location');
+
+                    if (!$location) {
+                        Log::warning('Redirect without Location header', [
+                            'url' => $currentUrl,
+                            'status' => $statusCode,
+                        ]);
+                        break;
+                    }
+
+                    // Handle relative redirects
+                    if (!str_starts_with($location, 'http://') && !str_starts_with($location, 'https://')) {
+                        // Relative URL - construct absolute URL
+                        $parsed = parse_url($currentUrl);
+                        $base = $parsed['scheme'] . '://' . $parsed['host'];
+                        if (isset($parsed['port'])) {
+                            $base .= ':' . $parsed['port'];
+                        }
+
+                        if (str_starts_with($location, '/')) {
+                            // Absolute path
+                            $location = $base . $location;
+                        } else {
+                            // Relative path
+                            $dir = dirname($parsed['path'] ?? '/');
+                            $location = $base . $dir . '/' . $location;
+                        }
+                    }
+
+                    Log::debug('Following redirect', [
+                        'from' => $currentUrl,
+                        'to' => $location,
+                        'status' => $statusCode,
+                        'redirect_number' => $redirectCount + 1,
+                    ]);
+
+                    $currentUrl = $location;
+                    $redirectCount++;
+                } elseif ($statusCode >= 200 && $statusCode < 300) {
+                    // Success - this is the final URL
+                    Log::debug('Final URL resolved', [
+                        'original' => $url,
+                        'final' => $currentUrl,
+                        'redirect_count' => $redirectCount,
+                    ]);
+                    return $currentUrl;
+                } else {
+                    // Error status (4xx, 5xx)
+                    Log::warning('Upstream returned error status', [
+                        'url' => $currentUrl,
+                        'status' => $statusCode,
+                    ]);
+                    // Return the current URL anyway - let nginx handle the error
+                    return $currentUrl;
+                }
+            }
+
+            if ($redirectCount >= $maxRedirects) {
+                Log::warning('Too many redirects', [
+                    'url' => $url,
+                    'redirect_count' => $redirectCount,
+                    'final_url' => $currentUrl,
+                ]);
+            }
+
+            // Return the last URL we got
+            return $currentUrl;
+
+        } catch (\Exception $e) {
+            Log::error('Failed to follow redirects', [
+                'url' => $url,
+                'error' => $e->getMessage(),
+            ]);
+
+            // On error, return the original URL - let nginx try it
+            return $url;
+        }
     }
 }
