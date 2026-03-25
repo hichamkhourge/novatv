@@ -34,6 +34,9 @@ RUN apk add --no-cache $PHPIZE_DEPS \
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
+# Copy PHP configuration
+COPY docker/php/php.ini /usr/local/etc/php/conf.d/custom.ini
+
 WORKDIR /var/www/html
 
 # Copy composer files

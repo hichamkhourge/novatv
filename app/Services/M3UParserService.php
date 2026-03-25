@@ -62,6 +62,27 @@ class M3UParserService
             }
 
             try {
+                // Handle file-based sources
+                if ($source->source_type === 'file' && $source->file_path) {
+                    $filePath = storage_path('app/' . $source->file_path);
+
+                    if (!file_exists($filePath)) {
+                        Log::error("M3U file not found for source {$sourceId}", [
+                            'file_path' => $filePath,
+                        ]);
+                        return [];
+                    }
+
+                    // Use stream reading for large files to avoid memory issues
+                    $channels = $this->parseM3UFromFile($filePath);
+
+                    // Update last_fetched_at
+                    $source->update(['last_fetched_at' => now()]);
+
+                    return $channels;
+                }
+
+                // Handle URL-based sources (existing logic)
                 $response = Http::timeout(30)->get($source->url);
 
                 if (!$response->successful()) {
@@ -134,6 +155,33 @@ class M3UParserService
                 $currentChannel = null;
             }
         }
+
+        return $channels;
+    }
+
+    private function parseM3UFromFile(string $filePath): array
+    {
+        $channels = [];
+        $currentChannel = null;
+        $handle = fopen($filePath, 'r');
+
+        if (!$handle) {
+            return [];
+        }
+
+        while (($line = fgets($handle)) !== false) {
+            $line = trim($line);
+
+            if (str_starts_with($line, '#EXTINF:')) {
+                $currentChannel = $this->parseExtInf($line);
+            } elseif ($currentChannel && !str_starts_with($line, '#') && !empty($line)) {
+                $currentChannel['url'] = $line;
+                $channels[] = $currentChannel;
+                $currentChannel = null;
+            }
+        }
+
+        fclose($handle);
 
         return $channels;
     }

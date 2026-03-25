@@ -47,15 +47,37 @@ class IptvUserResource extends Resource
                             ->required()
                             ->maxLength(255)
                             ->label('Source Name'),
-                        Forms\Components\TextInput::make('url')
+                        Forms\Components\Radio::make('source_type')
+                            ->label('Source Type')
+                            ->options([
+                                'url' => 'URL (Fetch from external source)',
+                                'file' => 'File (Upload M3U file)',
+                            ])
+                            ->default('url')
                             ->required()
+                            ->live(),
+                        Forms\Components\TextInput::make('url')
                             ->url()
                             ->maxLength(255)
                             ->label('M3U URL')
-                            ->helperText('Enter the full URL to the M3U playlist'),
+                            ->helperText('Enter the full URL to the M3U playlist')
+                            ->required(fn (Forms\Get $get): bool => $get('source_type') === 'url')
+                            ->visible(fn (Forms\Get $get): bool => $get('source_type') === 'url'),
+                        Forms\Components\FileUpload::make('file_path')
+                            ->label('M3U File')
+                            ->disk('local')
+                            ->directory('m3u_files')
+                            ->acceptedFileTypes(['application/x-mpegurl', 'audio/x-mpegurl', 'text/plain', '.m3u', '.m3u8'])
+                            ->maxSize(10240)
+                            ->required(fn (Forms\Get $get): bool => $get('source_type') === 'file')
+                            ->visible(fn (Forms\Get $get): bool => $get('source_type') === 'file')
+                            ->helperText('Upload an M3U or M3U8 file (max 10MB)'),
                         Forms\Components\Toggle::make('is_active')
                             ->default(true)
                             ->label('Active'),
+                        Forms\Components\Toggle::make('use_direct_urls')
+                            ->label('Use Direct URLs from Source')
+                            ->default(false),
                     ])
                     ->createOptionModalHeading('Create New M3U Source'),
                 Forms\Components\TextInput::make('max_connections')
