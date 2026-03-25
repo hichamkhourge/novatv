@@ -57,6 +57,11 @@ class PlaylistController extends Controller
         return match ($action) {
             'get_live_categories' => $this->getLiveCategories($user),
             'get_live_streams' => $this->getLiveStreams($user, $request),
+            'get_vod_categories' => $this->getVodCategories($user),
+            'get_vod_streams' => $this->getVodStreams($user, $request),
+            'get_series_categories' => $this->getSeriesCategories($user),
+            'get_series' => $this->getSeries($user, $request),
+            'get_short_epg' => $this->getShortEpg($user, $request),
             default => response()->json(['error' => 'Unknown action'], 400),
         };
     }
@@ -229,6 +234,42 @@ class PlaylistController extends Controller
         }, 200, [
             'Content-Type' => 'video/mp2t',
             'Cache-Control' => 'no-cache',
+        ]);
+    }
+
+    private function getVodCategories(IptvUser $user): \Illuminate\Http\JsonResponse
+    {
+        // Currently returns empty array - VOD support can be added later
+        return response()->json([]);
+    }
+
+    private function getVodStreams(IptvUser $user, Request $request): \Illuminate\Http\JsonResponse
+    {
+        // Currently returns empty array - VOD support can be added later
+        return response()->json([]);
+    }
+
+    private function getSeriesCategories(IptvUser $user): \Illuminate\Http\JsonResponse
+    {
+        // Currently returns empty array - Series support can be added later
+        return response()->json([]);
+    }
+
+    private function getSeries(IptvUser $user, Request $request): \Illuminate\Http\JsonResponse
+    {
+        // Currently returns empty array - Series support can be added later
+        return response()->json([]);
+    }
+
+    private function getShortEpg(IptvUser $user, Request $request): \Illuminate\Http\JsonResponse
+    {
+        $streamId = $request->input('stream_id');
+        $limit = $request->input('limit', 100);
+
+        // Currently returns empty array - EPG support can be added later
+        // This would typically return EPG data from external EPG source
+        return response()->json([
+            'epg_listings' => [],
         ]);
     }
 }
