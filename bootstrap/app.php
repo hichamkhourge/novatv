@@ -21,6 +21,9 @@ return Application::configure(basePath: dirname(__DIR__))
 
         // Cleanup stale sessions every minute
         $schedule->command('iptv:cleanup-sessions')->everyMinute();
+
+        // Run user subscription renewals daily at 2 AM
+        $schedule->command('iptv:run-user-renewals')->dailyAt('02:00');
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //

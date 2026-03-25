@@ -1,6 +1,6 @@
 FROM php:8.3-fpm-alpine AS app
 
-# Install dependencies
+# Install dependencies including Python3 and Chromium for automation
 RUN apk add --no-cache \
     postgresql-dev \
     libpng-dev \
@@ -11,7 +11,15 @@ RUN apk add --no-cache \
     curl \
     oniguruma-dev \
     icu-dev \
-    icu-libs
+    icu-libs \
+    python3 \
+    py3-pip \
+    chromium \
+    chromium-chromedriver \
+    nss \
+    freetype \
+    harfbuzz \
+    ttf-freefont
 
 # Configure and install PHP extensions
 RUN docker-php-ext-configure intl \
@@ -48,9 +56,18 @@ RUN composer install --no-dev --no-scripts --no-interaction --prefer-dist
 # Copy application code
 COPY . .
 
+# Install Python dependencies for automation scripts
+COPY requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
+
+# Set Chromium environment variables for undetected-chromedriver
+ENV CHROME_BIN=/usr/bin/chromium-browser \
+    CHROMEDRIVER_PATH=/usr/bin/chromedriver
+
 # Set permissions
 RUN chown -R www-data:www-data storage bootstrap/cache \
-    && chmod -R 775 storage bootstrap/cache
+    && chmod -R 775 storage bootstrap/cache \
+    && chmod +x scripts/*.py 2>/dev/null || true
 
 # Copy and set entrypoint
 COPY docker/entrypoint.sh /entrypoint.sh

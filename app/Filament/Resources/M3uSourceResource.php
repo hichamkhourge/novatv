@@ -12,6 +12,7 @@ use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
+use Illuminate\Support\Facades\Crypt;
 
 class M3uSourceResource extends Resource
 {
@@ -59,6 +60,97 @@ class M3uSourceResource extends Resource
                     ->label('Use Direct URLs from Source')
                     ->helperText('When enabled, playlists will contain original source URLs instead of proxied URLs. Note: This exposes source credentials to users and disables connection tracking.')
                     ->default(false),
+
+                Forms\Components\Section::make('Automation Configuration')
+                    ->description('Configure automated subscription renewals for users assigned to this source')
+                    ->schema([
+                        Forms\Components\Select::make('provider_type')
+                            ->label('Provider Type')
+                            ->options([
+                                'none' => 'None (No Automation)',
+                                'ugeen' => 'UGEEN',
+                                'zazy' => 'ZAZY',
+                                'custom' => 'Custom Script',
+                            ])
+                            ->default('none')
+                            ->required()
+                            ->live()
+                            ->columnSpanFull(),
+
+                        Forms\Components\TextInput::make('provider_username')
+                            ->label('Provider Username/Email')
+                            ->helperText('The email or username used to login to the provider panel')
+                            ->visible(fn (Forms\Get $get): bool => in_array($get('provider_type'), ['ugeen', 'zazy', 'custom']))
+                            ->dehydrateStateUsing(fn ($state) => $state ? Crypt::encryptString($state) : null)
+                            ->afterStateHydrated(function (Forms\Components\TextInput $component, $state) {
+                                if ($state) {
+                                    try {
+                                        $component->state(Crypt::decryptString($state));
+                                    } catch (\Exception $e) {
+                                        $component->state('');
+                                    }
+                                }
+                            })
+                            ->password()
+                            ->revealable()
+                            ->columnSpanFull(),
+
+                        Forms\Components\TextInput::make('provider_password')
+                            ->label('Provider Password')
+                            ->helperText('The password used to login to the provider panel')
+                            ->visible(fn (Forms\Get $get): bool => in_array($get('provider_type'), ['ugeen', 'zazy', 'custom']))
+                            ->dehydrateStateUsing(fn ($state) => $state ? Crypt::encryptString($state) : null)
+                            ->afterStateHydrated(function (Forms\Components\TextInput $component, $state) {
+                                if ($state) {
+                                    try {
+                                        $component->state(Crypt::decryptString($state));
+                                    } catch (\Exception $e) {
+                                        $component->state('');
+                                    }
+                                }
+                            })
+                            ->password()
+                            ->revealable()
+                            ->columnSpanFull(),
+
+                        Forms\Components\KeyValue::make('provider_config')
+                            ->label('Additional Configuration')
+                            ->helperText('Provider-specific settings (e.g., package_id, api_key, etc.)')
+                            ->visible(fn (Forms\Get $get): bool => in_array($get('provider_type'), ['ugeen', 'zazy', 'custom']))
+                            ->keyLabel('Setting Key')
+                            ->valueLabel('Setting Value')
+                            ->default(['package_id' => '384'])
+                            ->columnSpanFull(),
+
+                        Forms\Components\TextInput::make('script_path')
+                            ->label('Custom Script Path')
+                            ->helperText('Path to Python script (leave empty to use default for provider type)')
+                            ->visible(fn (Forms\Get $get): bool => $get('provider_type') === 'custom')
+                            ->placeholder('/path/to/script.py')
+                            ->columnSpanFull(),
+
+                        Forms\Components\Toggle::make('automation_enabled')
+                            ->label('Enable Automation')
+                            ->helperText('When enabled, users assigned to this source will have their subscriptions automatically renewed daily')
+                            ->visible(fn (Forms\Get $get): bool => in_array($get('provider_type'), ['ugeen', 'zazy', 'custom']))
+                            ->default(false),
+
+                        Forms\Components\Placeholder::make('last_automation_run')
+                            ->label('Last Automation Run')
+                            ->content(fn ($record) => $record && $record->last_automation_run
+                                ? $record->last_automation_run->diffForHumans()
+                                : 'Never')
+                            ->visible(fn ($record) => $record !== null),
+
+                        Forms\Components\Placeholder::make('automation_status')
+                            ->label('Last Run Status')
+                            ->content(fn ($record) => $record && $record->automation_status
+                                ? $record->automation_status
+                                : 'N/A')
+                            ->visible(fn ($record) => $record !== null),
+                    ])
+                    ->collapsible()
+                    ->collapsed(fn ($record) => $record && $record->provider_type === 'none'),
             ]);
     }
 
@@ -95,6 +187,27 @@ class M3uSourceResource extends Resource
                     ->label('Direct URLs')
                     ->boolean()
                     ->sortable(),
+                Tables\Columns\TextColumn::make('provider_type')
+                    ->label('Provider')
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'ugeen' => 'success',
+                        'zazy' => 'info',
+                        'custom' => 'warning',
+                        'none' => 'gray',
+                        default => 'gray',
+                    })
+                    ->formatStateUsing(fn (string $state): string => strtoupper($state))
+                    ->sortable(),
+                Tables\Columns\IconColumn::make('automation_enabled')
+                    ->label('Auto Renewal')
+                    ->boolean()
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('last_automation_run')
+                    ->label('Last Run')
+                    ->dateTime()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('last_fetched_at')
                     ->dateTime()
                     ->sortable(),
