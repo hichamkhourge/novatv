@@ -18,12 +18,25 @@ from fake_useragent import UserAgent
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import padding
 
 # Configuration from environment or arguments
 MAX_LOGIN_RETRIES = 5
 USE_HEADLESS = os.getenv('UGEEN_HEADLESS', 'true').lower() == 'true'
 TWOCAPTCHA_API_KEY = os.getenv('TWOCAPTCHA_API_KEY', '')
 SESSION_DIR = os.getenv('SESSION_DIR', '/tmp/iptv_sessions')
+
+# Database configuration
+DB_HOST = os.getenv('DB_HOST', 'localhost')
+DB_PORT = os.getenv('DB_PORT', '5432')
+DB_DATABASE = os.getenv('DB_DATABASE', 'iptv_provider')
+DB_USERNAME = os.getenv('DB_USERNAME', 'postgres')
+DB_PASSWORD = os.getenv('DB_PASSWORD', '')
+APP_KEY = os.getenv('APP_KEY', '')
 
 # Ensure session directory exists
 Path(SESSION_DIR).mkdir(parents=True, exist_ok=True)
@@ -32,6 +45,127 @@ def log(message, level='INFO'):
     """Simple logging function"""
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
     print(f"[{timestamp}] [{level}] {message}", flush=True)
+
+def decrypt_laravel_value(encrypted_value):
+    """Decrypt Laravel encrypted string (compatible with Crypt::encryptString)"""
+    try:
+        if not encrypted_value or not APP_KEY:
+            return None
+
+        # Remove 'base64:' prefix from APP_KEY if present
+        app_key = APP_KEY.replace('base64:', '')
+        key = base64.b64decode(app_key)
+
+        # Decode the encrypted payload
+        payload = json.loads(base64.b64decode(encrypted_value))
+
+        iv = base64.b64decode(payload['iv'])
+        ciphertext = base64.b64decode(payload['value'])
+
+        # Decrypt using AES-256-CBC
+        cipher = Cipher(
+            algorithms.AES(key),
+            modes.CBC(iv),
+            backend=default_backend()
+        )
+        decryptor = cipher.decryptor()
+        padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+
+        # Remove PKCS7 padding
+        unpadder = padding.PKCS7(128).unpadder()
+        plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
+
+        return plaintext.decode('utf-8')
+    except Exception as e:
+        log(f"Decryption failed: {e}", 'ERROR')
+        return None
+
+def get_db_connection():
+    """Create database connection"""
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            database=DB_DATABASE,
+            user=DB_USERNAME,
+            password=DB_PASSWORD
+        )
+        return conn
+    except Exception as e:
+        log(f"Database connection failed: {e}", 'ERROR')
+        return None
+
+def fetch_user_and_source(user_id):
+    """Fetch user and source data from database"""
+    conn = get_db_connection()
+    if not conn:
+        return None, None
+
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Fetch user with source details
+        cursor.execute("""
+            SELECT
+                u.id as user_id,
+                u.username,
+                u.m3u_source_id,
+                s.id as source_id,
+                s.name as source_name,
+                s.provider_type,
+                s.provider_username,
+                s.provider_password,
+                s.provider_config
+            FROM iptv_users u
+            LEFT JOIN m3u_sources s ON u.m3u_source_id = s.id
+            WHERE u.id = %s
+        """, (user_id,))
+
+        result = cursor.fetchone()
+        cursor.close()
+        conn.close()
+
+        if not result:
+            log(f"User with ID {user_id} not found in database", 'ERROR')
+            return None, None
+
+        if not result['m3u_source_id']:
+            log(f"User {result['username']} has no M3U source assigned", 'ERROR')
+            return None, None
+
+        if result['provider_type'] != 'ugeen':
+            log(f"User {result['username']} does not have a UGEEN source. Current provider: {result['provider_type']}", 'ERROR')
+            return None, None
+
+        # Decrypt credentials
+        provider_username = decrypt_laravel_value(result['provider_username']) if result['provider_username'] else None
+        provider_password = decrypt_laravel_value(result['provider_password']) if result['provider_password'] else None
+
+        if not provider_username or not provider_password:
+            log(f"Failed to decrypt provider credentials for source: {result['source_name']}", 'ERROR')
+            return None, None
+
+        user_data = {
+            'user_id': result['user_id'],
+            'username': result['username']
+        }
+
+        source_data = {
+            'source_id': result['source_id'],
+            'source_name': result['source_name'],
+            'provider_type': result['provider_type'],
+            'provider_username': provider_username,
+            'provider_password': provider_password,
+            'provider_config': result['provider_config'] or {}
+        }
+
+        return user_data, source_data
+
+    except Exception as e:
+        log(f"Database query failed: {e}", 'ERROR')
+        if conn:
+            conn.close()
+        return None, None
 
 def decode_jwt(token):
     """Decode JWT token without verification"""
@@ -817,18 +951,35 @@ def main():
     """CLI entry point"""
     parser = argparse.ArgumentParser(description='UGEEN User Renewal Script')
     parser.add_argument('--user-id', required=True, help='IPTV user ID')
-    parser.add_argument('--provider-username', required=True, help='UGEEN email address')
-    parser.add_argument('--provider-password', required=True, help='UGEEN password')
-    parser.add_argument('--package-id', default='384', help='Package ID (default: 384)')
+    parser.add_argument('--package-id', help='Package ID (optional, fetched from source config if not provided)')
     parser.add_argument('--proxy', help='Proxy server (optional)')
 
     args = parser.parse_args()
 
+    log("=== UGEEN User Renewal Script ===")
+    log(f"User ID: {args.user_id}")
+
+    # Fetch user and source data from database
+    log("Fetching user and source data from database...")
+    user_data, source_data = fetch_user_and_source(args.user_id)
+
+    if not user_data or not source_data:
+        log("Failed to fetch user or source data. Exiting.", 'ERROR')
+        sys.exit(1)
+
+    log(f"User: {user_data['username']}")
+    log(f"Source: {source_data['source_name']}")
+    log(f"Provider: {source_data['provider_type'].upper()}")
+
+    # Get package ID from args or source config
+    package_id = args.package_id or source_data['provider_config'].get('package_id', '384')
+    log(f"Package: {package_id}")
+
     success = renew_subscription(
         user_id=args.user_id,
-        provider_username=args.provider_username,
-        provider_password=args.provider_password,
-        package_id=args.package_id,
+        provider_username=source_data['provider_username'],
+        provider_password=source_data['provider_password'],
+        package_id=package_id,
         proxy=args.proxy
     )
 

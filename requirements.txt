@@ -11,3 +11,9 @@ requests==2.31.0
 
 # Fake user agents for anti-detection
 fake-useragent==1.4.0
+
+# Database connection
+psycopg2-binary==2.9.9
+
+# Encryption/Decryption (for Laravel Crypt compatibility)
+cryptography==41.0.7

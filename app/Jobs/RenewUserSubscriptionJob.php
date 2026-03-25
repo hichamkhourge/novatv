@@ -45,18 +45,6 @@ class RenewUserSubscriptionJob implements ShouldQueue
         try {
             Log::info("Running renewal for user {$this->user->username} (ID: {$this->user->id})");
 
-            // Decrypt provider credentials
-            $providerUsername = $this->source->provider_username
-                ? Crypt::decryptString($this->source->provider_username)
-                : null;
-            $providerPassword = $this->source->provider_password
-                ? Crypt::decryptString($this->source->provider_password)
-                : null;
-
-            if (!$providerUsername || !$providerPassword) {
-                throw new \Exception('Provider credentials not configured for this source');
-            }
-
             // Get script path
             $scriptPath = $this->source->script_path ?: $this->getDefaultScriptPath($this->source->provider_type);
 
@@ -64,25 +52,35 @@ class RenewUserSubscriptionJob implements ShouldQueue
                 throw new \Exception("Script not found at: {$scriptPath}");
             }
 
-            // Get additional config
-            $providerConfig = $this->source->provider_config ?? [];
-            $packageId = $providerConfig['package_id'] ?? '384';
-
-            // Build command
+            // Build command - script will fetch credentials from database
             $command = [
                 'python3',
                 $scriptPath,
                 '--user-id', (string)$this->user->id,
-                '--provider-username', $providerUsername,
-                '--provider-password', $providerPassword,
-                '--package-id', $packageId,
             ];
 
-            Log::info("Executing command", ['command' => implode(' ', array_map(fn($arg) => $arg === $providerPassword ? '***' : $arg, $command))]);
+            Log::info("Executing command", ['command' => implode(' ', $command)]);
 
-            // Run the process
+            // Prepare environment variables for subprocess
+            $envVars = [
+                'TWOCAPTCHA_API_KEY' => env('TWOCAPTCHA_API_KEY', ''),
+                'UGEEN_HEADLESS' => env('UGEEN_HEADLESS', 'true'),
+                'SESSION_DIR' => env('SESSION_DIR', '/tmp/iptv_sessions'),
+                'CHROME_BIN' => env('CHROME_BIN', '/usr/bin/chromium-browser'),
+                'CHROMEDRIVER_PATH' => env('CHROMEDRIVER_PATH', '/usr/bin/chromedriver'),
+                'UC_DRIVER_CACHE' => env('UC_DRIVER_CACHE', '/tmp/uc_driver_cache'),
+                'DB_HOST' => env('DB_HOST', 'localhost'),
+                'DB_PORT' => env('DB_PORT', '5432'),
+                'DB_DATABASE' => env('DB_DATABASE', 'iptv_provider'),
+                'DB_USERNAME' => env('DB_USERNAME', 'postgres'),
+                'DB_PASSWORD' => env('DB_PASSWORD', ''),
+                'APP_KEY' => env('APP_KEY', ''),
+            ];
+
+            // Run the process with environment variables
             $process = new Process($command);
             $process->setTimeout($this->timeout);
+            $process->setEnv($envVars);
             $process->run();
 
             $output = $process->getOutput();
