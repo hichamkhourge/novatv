@@ -22,6 +22,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // Cleanup stale sessions every minute
         $schedule->command('iptv:cleanup-sessions')->everyMinute();
 
+        // Cleanup old HLS transcoding processes every 5 minutes
+        $schedule->command('iptv:cleanup-hls')->everyFiveMinutes();
+
         // Run user subscription renewals daily at 2 AM
         $schedule->command('iptv:run-user-renewals')->dailyAt('02:00');
     })

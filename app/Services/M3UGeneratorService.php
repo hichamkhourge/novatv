@@ -78,12 +78,12 @@ class M3UGeneratorService
         // Generate stream ID from channel URL or tvg-id
         $streamId = md5($channel['url'] ?? $channel['tvg_id'] ?? rand());
 
-        // Build URL: /live/{username}/{password}/{stream_id}
-        // No extension - let the existing stream endpoint handle both TS and HLS
+        // Build URL: /hls/{username}/{password}/{stream_id}.m3u8
+        // Use HLS format for maximum compatibility with IPTV apps (IBO Player, IPTV Smarters Pro, etc.)
         $baseUrl = config('app.url');
 
         return sprintf(
-            '%s/live/%s/%s/%s',
+            '%s/hls/%s/%s/%s.m3u8',
             rtrim($baseUrl, '/'),
             urlencode($user->username),
             urlencode($user->password),

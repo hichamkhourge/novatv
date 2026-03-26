@@ -21,8 +21,8 @@ Route::middleware('throttle:60,1')->group(function () {
 
 // HLS stream routes with higher rate limit (for LG TV compatibility)
 Route::middleware('throttle:300,1')->group(function () {
-    Route::get('/hls/{username}/{password}/{streamId}', [HlsController::class, 'stream'])->name('iptv.hls');
-    Route::get('/hls-segment/{username}/{password}/{streamId}', [HlsController::class, 'segment'])->name('iptv.hls-segment');
+    Route::get('/hls/{username}/{password}/{streamId}.m3u8', [HlsController::class, 'playlist'])->name('iptv.hls.playlist');
+    Route::get('/hls/{username}/{password}/{streamId}/{segment}', [HlsController::class, 'segment'])->name('iptv.hls.segment');
 });
 
 // Legacy stream proxy route with higher rate limit (kept for backward compatibility)
