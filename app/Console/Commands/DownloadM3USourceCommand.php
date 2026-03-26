@@ -64,65 +64,81 @@ class DownloadM3USourceCommand extends Command
             }
 
             // Download with streaming to handle large files
-            // Using native PHP file operations for better control
+            // Using Laravel HTTP client (Guzzle) which works better in Docker/Dokploy
             $this->info("Starting download...");
             $startTime = microtime(true);
 
-            // Use PHP's native stream functions for large file downloads
-            $ctx = stream_context_create([
-                'http' => [
-                    'timeout' => 0,  // No timeout
-                    'user_agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'follow_location' => true,
-                    'max_redirects' => 5,
-                ],
-                'ssl' => [
-                    'verify_peer' => false,
-                    'verify_peer_name' => false,
-                ]
-            ]);
-
-            // Open source URL for reading
-            $source_fp = @fopen($source->url, 'r', false, $ctx);
-
-            if (!$source_fp) {
-                $this->error("Failed to open URL for reading");
-                $this->error("Error: " . error_get_last()['message'] ?? 'Unknown error');
-                return 1;
-            }
-
-            // Open destination file for writing
-            $dest_fp = fopen($tempFile, 'w');
-
-            if (!$dest_fp) {
-                fclose($source_fp);
-                $this->error("Failed to open destination file for writing");
-                return 1;
-            }
-
-            // Stream copy with progress indicator
-            $bytesDownloaded = 0;
+            $attempt = 0;
+            $maxAttempts = 3;
+            $success = false;
             $lastProgress = 0;
 
-            while (!feof($source_fp)) {
-                $chunk = fread($source_fp, 8192);  // Read 8KB at a time
-                if ($chunk === false) {
-                    break;
+            while ($attempt < $maxAttempts && !$success) {
+                $attempt++;
+
+                if ($attempt > 1) {
+                    $this->warn("Retry attempt {$attempt}/{$maxAttempts}...");
+                    sleep(2); // Wait 2 seconds before retry
                 }
 
-                fwrite($dest_fp, $chunk);
-                $bytesDownloaded += strlen($chunk);
+                try {
+                    // Use Guzzle streaming with sink option (streams directly to file)
+                    // This works reliably in Docker containers
+                    $response = Http::withOptions([
+                        'sink' => $tempFile,           // Stream directly to file
+                        'timeout' => 0,                // No timeout for large files
+                        'connect_timeout' => 30,       // 30s connection timeout
+                        'verify' => false,             // Disable SSL verification (IPTV sources often have issues)
+                        'stream' => true,              // Enable streaming
+                        'allow_redirects' => [
+                            'max' => 10,
+                            'strict' => true,
+                        ],
+                        'on_stats' => function ($stats) use (&$lastProgress) {
+                            // Progress tracking (Guzzle provides transfer stats)
+                            if (isset($stats['size_download'])) {
+                                $currentMB = round($stats['size_download'] / 1024 / 1024);
+                                if ($currentMB > 0 && $currentMB % 10 == 0 && $currentMB != $lastProgress) {
+                                    echo "Downloaded: {$currentMB} MB...\n";
+                                    $lastProgress = $currentMB;
+                                }
+                            }
+                        },
+                    ])
+                    ->withHeaders([
+                        'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    ])
+                    ->get($source->url);
 
-                // Show progress every 10MB
-                $currentMB = round($bytesDownloaded / 1024 / 1024);
-                if ($currentMB > $lastProgress && $currentMB % 10 == 0) {
-                    $this->info("Downloaded: {$currentMB} MB...");
-                    $lastProgress = $currentMB;
+                    if ($response->successful()) {
+                        $success = true;
+                    } else {
+                        $this->error("HTTP error: " . $response->status());
+                        if ($attempt < $maxAttempts) {
+                            continue;
+                        }
+                        return 1;
+                    }
+
+                } catch (\Illuminate\Http\Client\ConnectionException $e) {
+                    $this->error("Connection error: " . $e->getMessage());
+                    if ($attempt < $maxAttempts) {
+                        continue;
+                    }
+                    return 1;
+                } catch (\Exception $e) {
+                    $this->error("Download error: " . $e->getMessage());
+                    if ($attempt < $maxAttempts) {
+                        continue;
+                    }
+                    return 1;
                 }
             }
 
-            fclose($source_fp);
-            fclose($dest_fp);
+            if (!$success) {
+                $this->error("Failed to download after {$maxAttempts} attempts");
+                return 1;
+            }
 
             $duration = round(microtime(true) - $startTime, 2);
 
