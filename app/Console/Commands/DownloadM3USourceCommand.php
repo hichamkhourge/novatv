@@ -94,10 +94,10 @@ class DownloadM3USourceCommand extends Command
                             'max' => 10,
                             'strict' => true,
                         ],
-                        'on_stats' => function ($stats) use (&$lastProgress) {
-                            // Progress tracking (Guzzle provides transfer stats)
-                            if (isset($stats['size_download'])) {
-                                $currentMB = round($stats['size_download'] / 1024 / 1024);
+                        'progress' => function ($downloadTotal, $downloadedBytes, $uploadTotal, $uploadedBytes) use (&$lastProgress) {
+                            // Progress tracking during download
+                            if ($downloadedBytes > 0) {
+                                $currentMB = round($downloadedBytes / 1024 / 1024);
                                 if ($currentMB > 0 && $currentMB % 10 == 0 && $currentMB != $lastProgress) {
                                     echo "Downloaded: {$currentMB} MB...\n";
                                     $lastProgress = $currentMB;
