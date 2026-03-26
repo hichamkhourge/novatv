@@ -234,13 +234,14 @@ class AuthController extends Controller
 
         try {
             while ($redirectCount < $maxRedirects) {
-                // Make a HEAD request to check for redirects (faster than GET)
+                // Make a GET request to check for redirects
+                // Note: Using GET instead of HEAD because some IPTV servers don't respond to HEAD properly
                 $response = \Illuminate\Support\Facades\Http::withOptions([
                     'allow_redirects' => false,  // Don't follow automatically
                     'timeout' => 5,
                     'verify' => false,  // Disable SSL verification for self-signed certs
                 ])
-                ->head($currentUrl);
+                ->get($currentUrl);
 
                 $statusCode = $response->status();
 
