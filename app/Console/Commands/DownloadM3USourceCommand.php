@@ -71,7 +71,6 @@ class DownloadM3USourceCommand extends Command
             $attempt = 0;
             $maxAttempts = 3;
             $success = false;
-            $lastProgress = 0;
 
             while ($attempt < $maxAttempts && !$success) {
                 $attempt++;
@@ -85,55 +84,50 @@ class DownloadM3USourceCommand extends Command
 
                 try {
                     // Clean up any partial/error file from a previous attempt
-                    // (Guzzle's 'sink' writes even on HTTP errors like 522)
+                    // (sink writes even on HTTP errors like 522)
                     if (file_exists($tempFile)) {
                         unlink($tempFile);
                     }
 
-                    // Use Guzzle streaming with sink option (streams directly to file)
-                    // This works reliably in Docker containers
-                    $response = Http::withOptions([
-                        'sink' => $tempFile,           // Stream directly to file
-                        'timeout' => 300,              // 5 minute timeout for slow servers
-                        'connect_timeout' => 60,       // 60s connection timeout (Cloudflare can be slow)
-                        'read_timeout' => 300,         // 5 minute read timeout
-                        'verify' => false,             // Disable SSL verification (IPTV sources often have issues)
-                        'stream' => true,              // Enable streaming
-                        'allow_redirects' => [
-                            'max' => 10,
-                            'strict' => true,
+                    // Use raw Guzzle directly — bypasses Laravel HTTP client quirks.
+                    // IMPORTANT: Do NOT combine 'sink' with 'progress' — they conflict
+                    // in many Guzzle versions and cause the request to fail silently.
+                    $client = new \GuzzleHttp\Client();
+                    $guzzleResponse = $client->request('GET', $source->url, [
+                        'sink'             => $tempFile,
+                        'timeout'          => 300,
+                        'connect_timeout'  => 60,
+                        'verify'           => false,
+                        'allow_redirects'  => ['max' => 10],
+                        'force_ip_resolve' => 'v4',
+                        'headers'          => [
+                            'User-Agent'      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                            'Accept'          => 'application/octet-stream, text/plain, */*',
+                            'Accept-Encoding' => 'identity',
                         ],
-                        'force_ip_resolve' => 'v4',    // Force IPv4 (some servers don't handle IPv6 well)
-                        'progress' => function ($downloadTotal, $downloadedBytes, $uploadTotal, $uploadedBytes) use (&$lastProgress) {
-                            // Progress tracking during download
-                            if ($downloadedBytes > 0) {
-                                $currentMB = round($downloadedBytes / 1024 / 1024);
-                                if ($currentMB > 0 && $currentMB % 10 == 0 && $currentMB != $lastProgress) {
-                                    echo "Downloaded: {$currentMB} MB...\n";
-                                    $lastProgress = $currentMB;
-                                }
-                            }
-                        },
-                    ])
-                        ->withHeaders([
-                            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                            'Accept' => 'application/octet-stream, text/plain, */*',
-                            'Accept-Encoding' => 'identity',  // Don't compress (faster for large files)
-                        ])
-                        ->get($source->url);
+                    ]);
 
-                    if ($response->successful()) {
+                    $statusCode = $guzzleResponse->getStatusCode();
+
+                    if ($statusCode >= 200 && $statusCode < 300) {
                         $success = true;
                     } else {
-                        $this->error("HTTP error: " . $response->status());
+                        $this->error("HTTP error: {$statusCode}");
                         if ($attempt < $maxAttempts) {
                             continue;
                         }
                         return 1;
                     }
 
-                } catch (\Illuminate\Http\Client\ConnectionException $e) {
+                } catch (\GuzzleHttp\Exception\ConnectException $e) {
                     $this->error("Connection error: " . $e->getMessage());
+                    if ($attempt < $maxAttempts) {
+                        continue;
+                    }
+                    return 1;
+                } catch (\GuzzleHttp\Exception\BadResponseException $e) {
+                    $statusCode = $e->getResponse()->getStatusCode();
+                    $this->error("HTTP error: {$statusCode}");
                     if ($attempt < $maxAttempts) {
                         continue;
                     }
