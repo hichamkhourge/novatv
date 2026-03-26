@@ -83,9 +83,13 @@ class AuthController extends Controller
             return response('Stream not found', 404);
         }
 
-        // Follow redirects to get final URL
-        // Many IPTV providers use 302 redirects to CDN/load balancers
-        $finalUrl = $this->followRedirects($upstreamUrl);
+        // Follow redirects to get final URL (with caching)
+        // Many IPTV providers use 302 redirects to CDN/load balancers with tokens
+        // Cache the final URL for 5 minutes to avoid repeated redirect checks
+        $cacheKey = "final_url:" . md5($upstreamUrl);
+        $finalUrl = Cache::remember($cacheKey, 300, function () use ($upstreamUrl) {
+            return $this->followRedirects($upstreamUrl);
+        });
 
         if (!$finalUrl) {
             Log::error('Stream auth: Failed to resolve redirects', [
@@ -150,14 +154,14 @@ class AuthController extends Controller
 
     /**
      * Resolve stream ID to upstream URL
-     * Uses caching for performance (60 second TTL)
+     * Uses caching for performance (5 minute TTL)
      */
     private function resolveStreamUrl(IptvUser $user, string $streamId): ?string
     {
         // Cache key includes user ID and stream ID
         $cacheKey = "stream_url:{$user->id}:{$streamId}";
 
-        return Cache::remember($cacheKey, 60, function () use ($user, $streamId) {
+        return Cache::remember($cacheKey, 300, function () use ($user, $streamId) {
             if (!$user->m3u_source_id) {
                 Log::debug('No M3U source assigned to user', ['user_id' => $user->id]);
                 return null;
@@ -235,11 +239,15 @@ class AuthController extends Controller
         try {
             while ($redirectCount < $maxRedirects) {
                 // Make a GET request to check for redirects
-                // Note: Using GET instead of HEAD because some IPTV servers don't respond to HEAD properly
+                // Note: Using GET with stream=true to get headers only (don't download body)
                 $response = \Illuminate\Support\Facades\Http::withOptions([
                     'allow_redirects' => false,  // Don't follow automatically
-                    'timeout' => 5,
+                    'timeout' => 3,  // Reduced timeout for faster response
                     'verify' => false,  // Disable SSL verification for self-signed certs
+                    'stream' => true,  // Don't download body, just get headers
+                ])
+                ->withHeaders([
+                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 ])
                 ->get($currentUrl);
 
