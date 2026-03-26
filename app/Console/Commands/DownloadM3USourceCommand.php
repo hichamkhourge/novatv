@@ -64,34 +64,82 @@ class DownloadM3USourceCommand extends Command
             }
 
             // Download with streaming to handle large files
-            // No timeout - let it download completely
+            // Using native PHP file operations for better control
             $this->info("Starting download...");
             $startTime = microtime(true);
 
-            $response = Http::withOptions([
-                'sink' => $tempFile,  // Stream directly to file
-                'timeout' => 0,  // No timeout
-                'connect_timeout' => 30,
-                'verify' => false,
-                'stream' => true,
-            ])
-            ->withHeaders([
-                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            ])
-            ->get($source->url);
+            // Use PHP's native stream functions for large file downloads
+            $ctx = stream_context_create([
+                'http' => [
+                    'timeout' => 0,  // No timeout
+                    'user_agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'follow_location' => true,
+                    'max_redirects' => 5,
+                ],
+                'ssl' => [
+                    'verify_peer' => false,
+                    'verify_peer_name' => false,
+                ]
+            ]);
 
-            $duration = round(microtime(true) - $startTime, 2);
+            // Open source URL for reading
+            $source_fp = @fopen($source->url, 'r', false, $ctx);
 
-            if (!$response->successful()) {
-                $this->error("Failed to download M3U: HTTP {$response->status()}");
-                if (file_exists($tempFile)) {
-                    unlink($tempFile);
-                }
+            if (!$source_fp) {
+                $this->error("Failed to open URL for reading");
+                $this->error("Error: " . error_get_last()['message'] ?? 'Unknown error');
                 return 1;
             }
 
-            // Check file size
+            // Open destination file for writing
+            $dest_fp = fopen($tempFile, 'w');
+
+            if (!$dest_fp) {
+                fclose($source_fp);
+                $this->error("Failed to open destination file for writing");
+                return 1;
+            }
+
+            // Stream copy with progress indicator
+            $bytesDownloaded = 0;
+            $lastProgress = 0;
+
+            while (!feof($source_fp)) {
+                $chunk = fread($source_fp, 8192);  // Read 8KB at a time
+                if ($chunk === false) {
+                    break;
+                }
+
+                fwrite($dest_fp, $chunk);
+                $bytesDownloaded += strlen($chunk);
+
+                // Show progress every 10MB
+                $currentMB = round($bytesDownloaded / 1024 / 1024);
+                if ($currentMB > $lastProgress && $currentMB % 10 == 0) {
+                    $this->info("Downloaded: {$currentMB} MB...");
+                    $lastProgress = $currentMB;
+                }
+            }
+
+            fclose($source_fp);
+            fclose($dest_fp);
+
+            $duration = round(microtime(true) - $startTime, 2);
+
+            // Check if file was created and has content
+            if (!file_exists($tempFile)) {
+                $this->error("Download failed: File was not created");
+                return 1;
+            }
+
             $fileSize = filesize($tempFile);
+
+            if ($fileSize === 0) {
+                $this->error("Download failed: File is empty");
+                unlink($tempFile);
+                return 1;
+            }
+
             $fileSizeMB = round($fileSize / 1024 / 1024, 2);
 
             $this->info("Download complete!");
