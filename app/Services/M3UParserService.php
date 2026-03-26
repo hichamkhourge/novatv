@@ -15,7 +15,7 @@ class M3UParserService
     public function fetchAndCache(string $sourceUrl): array
     {
         try {
-            $response = Http::timeout(30)->get($sourceUrl);
+            $response = Http::timeout(120)->get($sourceUrl);
 
             if (!$response->successful()) {
                 Log::error("Failed to fetch M3U from {$sourceUrl}", [
@@ -83,7 +83,7 @@ class M3UParserService
                 }
 
                 // Handle URL-based sources (existing logic)
-                $response = Http::timeout(30)->get($source->url);
+                $response = Http::timeout(120)->get($source->url);
 
                 if (!$response->successful()) {
                     Log::error("Failed to fetch M3U from source {$sourceId}", [
