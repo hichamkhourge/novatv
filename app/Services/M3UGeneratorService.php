@@ -78,35 +78,16 @@ class M3UGeneratorService
         // Generate stream ID from channel URL or tvg-id
         $streamId = md5($channel['url'] ?? $channel['tvg_id'] ?? rand());
 
-        // Detect stream type from original URL to use appropriate extension
-        $extension = $this->detectStreamExtension($channel['url'] ?? '');
-
-        // Build URL: /live/{username}/{password}/{stream_id}.{extension}
+        // Build URL: /hls/{username}/{password}/{stream_id}.m3u8
+        // All streams are now converted to HLS format for LG TV compatibility
         $baseUrl = config('app.url');
 
         return sprintf(
-            '%s/live/%s/%s/%s.%s',
+            '%s/hls/%s/%s/%s.m3u8',
             rtrim($baseUrl, '/'),
             urlencode($user->username),
             urlencode($user->password),
-            $streamId,
-            $extension
+            $streamId
         );
-    }
-
-    /**
-     * Detect appropriate extension based on original stream URL
-     */
-    private function detectStreamExtension(string $url): string
-    {
-        $path = parse_url($url, PHP_URL_PATH);
-        $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-
-        // If original is HLS, use .m3u8, otherwise default to .ts
-        if (in_array($extension, ['m3u8', 'm3u'])) {
-            return 'm3u8';
-        }
-
-        return 'ts';
     }
 }

@@ -3,6 +3,7 @@
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\PlaylistController;
 use App\Http\Controllers\StreamController;
+use App\Http\Controllers\HlsController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -18,7 +19,13 @@ Route::middleware('throttle:60,1')->group(function () {
     Route::get('/player_api.php', [PlaylistController::class, 'playerApi'])->name('iptv.player-api');
 });
 
-// Stream proxy route with higher rate limit
+// HLS stream routes with higher rate limit (for LG TV compatibility)
+Route::middleware('throttle:300,1')->group(function () {
+    Route::get('/hls/{username}/{password}/{streamId}', [HlsController::class, 'stream'])->name('iptv.hls');
+    Route::get('/hls-segment/{username}/{password}/{streamId}', [HlsController::class, 'segment'])->name('iptv.hls-segment');
+});
+
+// Legacy stream proxy route with higher rate limit (kept for backward compatibility)
 Route::middleware('throttle:300,1')->group(function () {
     Route::get('/live/{username}/{password}/{streamId}', [PlaylistController::class, 'stream'])->name('iptv.stream');
 });
