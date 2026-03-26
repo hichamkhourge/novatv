@@ -278,7 +278,7 @@ class PlaylistController extends Controller
             $response = Http::withHeaders($headers)
                 ->withOptions([
                     'stream' => true,
-                    'timeout' => 5,           // Initial connection timeout
+                    'timeout' => 30,          // Initial connection timeout (increased from 5s)
                     'read_timeout' => 0,      // No timeout for reading stream chunks
                     'verify' => false,        // Disable SSL verification (some IPTV sources use self-signed certs)
                     'allow_redirects' => [
@@ -425,7 +425,7 @@ class PlaylistController extends Controller
             // Fetch the HLS playlist from upstream
             $response = Http::withHeaders($headers)
                 ->withOptions([
-                    'timeout' => 10,
+                    'timeout' => 30,  // Increased from 10s to 30s
                     'verify' => false,
                     'allow_redirects' => [
                         'max' => 5,

@@ -105,7 +105,7 @@ class HlsController extends Controller
 
             $response = Http::withHeaders($headers)
                 ->withOptions([
-                    'timeout' => 10,
+                    'timeout' => 30,  // Increased from 10s to 30s for large playlists
                     'verify' => false,
                     'allow_redirects' => ['max' => 5],
                 ])

@@ -85,9 +85,9 @@ class AuthController extends Controller
 
         // Follow redirects to get final URL (with caching)
         // Many IPTV providers use 302 redirects to CDN/load balancers with tokens
-        // Cache the final URL for 5 minutes to avoid repeated redirect checks
+        // Cache the final URL for 1 minute to avoid expired tokens (reduced from 5 minutes)
         $cacheKey = "final_url:" . md5($upstreamUrl);
-        $finalUrl = Cache::remember($cacheKey, 300, function () use ($upstreamUrl) {
+        $finalUrl = Cache::remember($cacheKey, 60, function () use ($upstreamUrl) {
             return $this->followRedirects($upstreamUrl);
         });
 
@@ -242,7 +242,7 @@ class AuthController extends Controller
                 // Note: Using GET with stream=true to get headers only (don't download body)
                 $response = \Illuminate\Support\Facades\Http::withOptions([
                     'allow_redirects' => false,  // Don't follow automatically
-                    'timeout' => 3,  // Reduced timeout for faster response
+                    'timeout' => 10,  // Timeout for redirect checking (increased from 3s)
                     'verify' => false,  // Disable SSL verification for self-signed certs
                     'stream' => true,  // Don't download body, just get headers
                 ])

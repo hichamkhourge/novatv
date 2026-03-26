@@ -23,21 +23,50 @@ class StreamController extends Controller
         // Build upstream URL
         $upstreamUrl = "http://ugeen.live:8080/Ugeen_VIPR5WrbA/pnasWG/{$streamId}";
 
-        // Stream the response transparently
-        $response = Http::timeout(10)->get($upstreamUrl);
-
+        // Stream the response transparently with proper error handling
         return response()->stream(function () use ($upstreamUrl) {
-            $stream = fopen($upstreamUrl, 'rb');
-            if ($stream) {
-                while (!feof($stream)) {
-                    echo fread($stream, 8192);
-                    flush();
-                }
-                fclose($stream);
+            // Use stream context with longer timeout and proper options
+            $context = stream_context_create([
+                'http' => [
+                    'timeout' => 30,  // 30 second connection timeout
+                    'ignore_errors' => false,
+                    'user_agent' => request()->header('User-Agent', 'Mozilla/5.0'),
+                ],
+                'ssl' => [
+                    'verify_peer' => false,
+                    'verify_peer_name' => false,
+                ],
+            ]);
+
+            $stream = @fopen($upstreamUrl, 'rb', false, $context);
+
+            if ($stream === false) {
+                abort(502, 'Failed to connect to upstream server');
             }
+
+            // Set stream timeout for reading
+            stream_set_timeout($stream, 30);
+
+            // Use larger buffer for better video streaming performance (64KB)
+            while (!feof($stream)) {
+                $chunk = fread($stream, 65536);
+                if ($chunk === false) {
+                    break;
+                }
+                echo $chunk;
+                flush();
+
+                // Check for client disconnect
+                if (connection_aborted()) {
+                    break;
+                }
+            }
+
+            fclose($stream);
         }, 200, [
             'Content-Type'  => 'video/mp2t',
             'Cache-Control' => 'no-cache',
+            'X-Accel-Buffering' => 'no',  // Disable nginx buffering
         ]);
     }
 }
