@@ -78,12 +78,12 @@ class M3UGeneratorService
         // Generate stream ID from channel URL or tvg-id
         $streamId = md5($channel['url'] ?? $channel['tvg_id'] ?? rand());
 
-        // Build URL: /hls/{username}/{password}/{stream_id}.m3u8
-        // All streams are now converted to HLS format for LG TV compatibility
+        // Build URL: /live/{username}/{password}/{stream_id}
+        // No extension - let the existing stream endpoint handle both TS and HLS
         $baseUrl = config('app.url');
 
         return sprintf(
-            '%s/hls/%s/%s/%s.m3u8',
+            '%s/live/%s/%s/%s',
             rtrim($baseUrl, '/'),
             urlencode($user->username),
             urlencode($user->password),
