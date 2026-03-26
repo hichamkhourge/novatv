@@ -78,22 +78,32 @@ class DownloadM3USourceCommand extends Command
 
                 if ($attempt > 1) {
                     $this->warn("Retry attempt {$attempt}/{$maxAttempts}...");
-                    sleep(2); // Wait 2 seconds before retry
+                    $waitTime = $attempt * 3; // Progressive backoff: 3s, 6s, 9s
+                    $this->info("Waiting {$waitTime} seconds before retry...");
+                    sleep($waitTime);
                 }
 
                 try {
+                    // Clean up any partial/error file from a previous attempt
+                    // (Guzzle's 'sink' writes even on HTTP errors like 522)
+                    if (file_exists($tempFile)) {
+                        unlink($tempFile);
+                    }
+
                     // Use Guzzle streaming with sink option (streams directly to file)
                     // This works reliably in Docker containers
                     $response = Http::withOptions([
                         'sink' => $tempFile,           // Stream directly to file
-                        'timeout' => 0,                // No timeout for large files
-                        'connect_timeout' => 30,       // 30s connection timeout
+                        'timeout' => 300,              // 5 minute timeout for slow servers
+                        'connect_timeout' => 60,       // 60s connection timeout (Cloudflare can be slow)
+                        'read_timeout' => 300,         // 5 minute read timeout
                         'verify' => false,             // Disable SSL verification (IPTV sources often have issues)
                         'stream' => true,              // Enable streaming
                         'allow_redirects' => [
                             'max' => 10,
                             'strict' => true,
                         ],
+                        'force_ip_resolve' => 'v4',    // Force IPv4 (some servers don't handle IPv6 well)
                         'progress' => function ($downloadTotal, $downloadedBytes, $uploadTotal, $uploadedBytes) use (&$lastProgress) {
                             // Progress tracking during download
                             if ($downloadedBytes > 0) {
@@ -105,10 +115,12 @@ class DownloadM3USourceCommand extends Command
                             }
                         },
                     ])
-                    ->withHeaders([
-                        'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    ])
-                    ->get($source->url);
+                        ->withHeaders([
+                            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                            'Accept' => 'application/octet-stream, text/plain, */*',
+                            'Accept-Encoding' => 'identity',  // Don't compress (faster for large files)
+                        ])
+                        ->get($source->url);
 
                     if ($response->successful()) {
                         $success = true;
@@ -152,6 +164,21 @@ class DownloadM3USourceCommand extends Command
 
             if ($fileSize === 0) {
                 $this->error("Download failed: File is empty");
+                unlink($tempFile);
+                return 1;
+            }
+
+            // Validate the file is actually an M3U (not a Cloudflare/HTML error page)
+            $firstLine = '';
+            $handle = fopen($tempFile, 'r');
+            if ($handle) {
+                $firstLine = trim(fgets($handle));
+                fclose($handle);
+            }
+
+            if (!str_starts_with($firstLine, '#EXTM3U')) {
+                $this->error("Downloaded file does not appear to be a valid M3U (first line: \"{$firstLine}\")");
+                $this->error("The server may have returned an error page instead of the M3U file.");
                 unlink($tempFile);
                 return 1;
             }
