@@ -20,8 +20,8 @@ class M3uSourceObserver
      */
     public function created(M3uSource $m3uSource): void
     {
-        Log::info("M3uSourceObserver: Source {$m3uSource->name} created, syncing sources to tuliprox");
-        $this->tuliproxService->syncSources();
+        Log::info("M3uSourceObserver: Source {$m3uSource->name} created, syncing tuliprox config");
+        $this->tuliproxService->syncAll();
     }
 
     /**
@@ -29,8 +29,8 @@ class M3uSourceObserver
      */
     public function updated(M3uSource $m3uSource): void
     {
-        Log::info("M3uSourceObserver: Source {$m3uSource->name} updated, syncing sources to tuliprox");
-        $this->tuliproxService->syncSources();
+        Log::info("M3uSourceObserver: Source {$m3uSource->name} updated, syncing tuliprox config");
+        $this->tuliproxService->syncAll();
     }
 
     /**
@@ -38,8 +38,8 @@ class M3uSourceObserver
      */
     public function deleted(M3uSource $m3uSource): void
     {
-        Log::info("M3uSourceObserver: Source {$m3uSource->name} deleted, syncing sources to tuliprox");
-        $this->tuliproxService->syncSources();
+        Log::info("M3uSourceObserver: Source {$m3uSource->name} deleted, syncing tuliprox config");
+        $this->tuliproxService->syncAll();
     }
 
     /**
@@ -47,7 +47,7 @@ class M3uSourceObserver
      */
     public function restored(M3uSource $m3uSource): void
     {
-        Log::info("M3uSourceObserver: Source {$m3uSource->name} restored, syncing sources to tuliprox");
-        $this->tuliproxService->syncSources();
+        Log::info("M3uSourceObserver: Source {$m3uSource->name} restored, syncing tuliprox config");
+        $this->tuliproxService->syncAll();
     }
 }

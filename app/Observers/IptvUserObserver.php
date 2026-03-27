@@ -20,8 +20,8 @@ class IptvUserObserver
      */
     public function created(IptvUser $iptvUser): void
     {
-        Log::info("IptvUserObserver: User {$iptvUser->username} created, syncing to tuliprox");
-        $this->tuliproxService->addUser($iptvUser);
+        Log::info("IptvUserObserver: User {$iptvUser->username} created, syncing tuliprox config");
+        $this->tuliproxService->syncAll();
     }
 
     /**
@@ -29,15 +29,8 @@ class IptvUserObserver
      */
     public function updated(IptvUser $iptvUser): void
     {
-        Log::info("IptvUserObserver: User {$iptvUser->username} updated, syncing all users to tuliprox");
-
-        // If user was deactivated, remove from tuliprox
-        if (!$iptvUser->is_active) {
-            $this->tuliproxService->removeUser($iptvUser);
-        } else {
-            // Otherwise sync all users to ensure consistency
-            $this->tuliproxService->syncAllUsers();
-        }
+        Log::info("IptvUserObserver: User {$iptvUser->username} updated, syncing tuliprox config");
+        $this->tuliproxService->syncAll();
     }
 
     /**
@@ -45,8 +38,8 @@ class IptvUserObserver
      */
     public function deleted(IptvUser $iptvUser): void
     {
-        Log::info("IptvUserObserver: User {$iptvUser->username} deleted, removing from tuliprox");
-        $this->tuliproxService->removeUser($iptvUser);
+        Log::info("IptvUserObserver: User {$iptvUser->username} deleted, syncing tuliprox config");
+        $this->tuliproxService->syncAll();
     }
 
     /**
@@ -54,7 +47,7 @@ class IptvUserObserver
      */
     public function restored(IptvUser $iptvUser): void
     {
-        Log::info("IptvUserObserver: User {$iptvUser->username} restored, adding to tuliprox");
-        $this->tuliproxService->addUser($iptvUser);
+        Log::info("IptvUserObserver: User {$iptvUser->username} restored, syncing tuliprox config");
+        $this->tuliproxService->syncAll();
     }
 }

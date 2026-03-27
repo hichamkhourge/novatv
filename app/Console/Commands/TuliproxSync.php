@@ -15,15 +15,16 @@ class TuliproxSync extends Command
      * @var string
      */
     protected $signature = 'tuliprox:sync
-                            {--users : Sync only users}
-                            {--sources : Sync only sources}';
+                            {--users : Sync only user.yml}
+                            {--sources : Sync only source.yml}
+                            {--api-proxy : Sync only api-proxy.yml}';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Sync active IPTV users and M3U sources to tuliprox configuration files';
+    protected $description = 'Sync all Tuliprox configuration files (source.yml, user.yml, api-proxy.yml)';
 
     protected TuliproxService $tuliproxService;
 
@@ -34,28 +35,35 @@ class TuliproxSync extends Command
     {
         $this->tuliproxService = $tuliproxService;
 
-        $syncUsers = !$this->option('sources');
-        $syncSources = !$this->option('users');
+        // Check if specific files are requested
+        $syncUsers = $this->option('users');
+        $syncSources = $this->option('sources');
+        $syncApiProxy = $this->option('api-proxy');
 
-        // If both options are provided or none, sync both
-        if ($this->option('users') && $this->option('sources')) {
-            $syncUsers = true;
-            $syncSources = true;
-        }
+        // If no options provided, sync all
+        $syncAll = !$syncUsers && !$syncSources && !$syncApiProxy;
 
         $this->info('Starting tuliprox synchronization...');
         $this->newLine();
 
         $success = true;
 
-        // Sync users
-        if ($syncUsers) {
-            $success = $this->syncUsers() && $success;
-        }
+        if ($syncAll) {
+            // Sync all files
+            $success = $this->syncAll();
+        } else {
+            // Sync specific files
+            if ($syncSources) {
+                $success = $this->syncSources() && $success;
+            }
 
-        // Sync sources
-        if ($syncSources) {
-            $success = $this->syncSources() && $success;
+            if ($syncUsers) {
+                $success = $this->syncUsers() && $success;
+            }
+
+            if ($syncApiProxy) {
+                $success = $this->syncApiProxy() && $success;
+            }
         }
 
         $this->newLine();
@@ -70,11 +78,27 @@ class TuliproxSync extends Command
     }
 
     /**
-     * Sync users to tuliprox
+     * Sync all configuration files
+     */
+    protected function syncAll(): bool
+    {
+        $this->line('Syncing all configuration files...');
+        $this->newLine();
+
+        $success = true;
+        $success = $this->syncSources() && $success;
+        $success = $this->syncUsers() && $success;
+        $success = $this->syncApiProxy() && $success;
+
+        return $success;
+    }
+
+    /**
+     * Sync user.yml
      */
     protected function syncUsers(): bool
     {
-        $this->line('Syncing IPTV users...');
+        $this->line('Syncing user.yml...');
 
         try {
             $activeUsers = IptvUser::where('is_active', true)->get();
@@ -82,30 +106,29 @@ class TuliproxSync extends Command
 
             if ($totalUsers === 0) {
                 $this->warn('  No active users found to sync.');
-                return true;
             }
 
-            $result = $this->tuliproxService->syncAllUsers();
+            $result = $this->tuliproxService->syncUsers();
 
             if ($result) {
                 $this->info("  ✓ Successfully synced {$totalUsers} active user(s) to user.yml");
                 return true;
             } else {
-                $this->error('  ✗ Failed to sync users');
+                $this->error('  ✗ Failed to sync user.yml');
                 return false;
             }
         } catch (\Exception $e) {
-            $this->error('  ✗ Error syncing users: ' . $e->getMessage());
+            $this->error('  ✗ Error syncing user.yml: ' . $e->getMessage());
             return false;
         }
     }
 
     /**
-     * Sync sources to tuliprox
+     * Sync source.yml
      */
     protected function syncSources(): bool
     {
-        $this->line('Syncing M3U sources...');
+        $this->line('Syncing source.yml...');
 
         try {
             $activeSources = M3uSource::where('is_active', true)->get();
@@ -113,7 +136,6 @@ class TuliproxSync extends Command
 
             if ($totalSources === 0) {
                 $this->warn('  No active sources found to sync.');
-                return true;
             }
 
             $result = $this->tuliproxService->syncSources();
@@ -122,11 +144,34 @@ class TuliproxSync extends Command
                 $this->info("  ✓ Successfully synced {$totalSources} active source(s) to source.yml");
                 return true;
             } else {
-                $this->error('  ✗ Failed to sync sources');
+                $this->error('  ✗ Failed to sync source.yml');
                 return false;
             }
         } catch (\Exception $e) {
-            $this->error('  ✗ Error syncing sources: ' . $e->getMessage());
+            $this->error('  ✗ Error syncing source.yml: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Sync api-proxy.yml
+     */
+    protected function syncApiProxy(): bool
+    {
+        $this->line('Syncing api-proxy.yml...');
+
+        try {
+            $result = $this->tuliproxService->syncApiProxy();
+
+            if ($result) {
+                $this->info("  ✓ Successfully synced api-proxy.yml");
+                return true;
+            } else {
+                $this->error('  ✗ Failed to sync api-proxy.yml');
+                return false;
+            }
+        } catch (\Exception $e) {
+            $this->error('  ✗ Error syncing api-proxy.yml: ' . $e->getMessage());
             return false;
         }
     }

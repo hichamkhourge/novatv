@@ -9,6 +9,7 @@ class M3uSource extends Model
 {
     protected $fillable = [
         'name',
+        'target_name',
         'url',
         'source_type',
         'file_path',
@@ -43,5 +44,18 @@ class M3uSource extends Model
     public function iptvUsers(): HasMany
     {
         return $this->hasMany(IptvUser::class);
+    }
+
+    public function channels(): HasMany
+    {
+        return $this->hasMany(Channel::class);
+    }
+
+    /**
+     * Get the target name, generating from name if not set
+     */
+    public function getTargetNameAttribute($value): string
+    {
+        return $value ?? \Illuminate\Support\Str::slug($this->name);
     }
 }

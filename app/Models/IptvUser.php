@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class IptvUser extends Model
@@ -17,6 +18,7 @@ class IptvUser extends Model
         'expires_at',
         'package_id',
         'm3u_source_id',
+        'tuliprox_server_id',
         'notes',
     ];
 
@@ -39,9 +41,19 @@ class IptvUser extends Model
         return $this->belongsTo(M3uSource::class);
     }
 
+    public function tuliproxServer(): BelongsTo
+    {
+        return $this->belongsTo(TuliproxServer::class);
+    }
+
     public function streamSessions(): HasMany
     {
         return $this->hasMany(StreamSession::class);
+    }
+
+    public function channels(): BelongsToMany
+    {
+        return $this->belongsToMany(Channel::class, 'iptv_user_channel');
     }
 
     public function isExpired(): bool

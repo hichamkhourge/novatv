@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\IptvUser;
 use App\Models\M3uSource;
+use App\Models\TuliproxServer;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Log;
@@ -14,115 +15,56 @@ class TuliproxService
     protected string $configPath;
     protected string $userYmlPath;
     protected string $sourceYmlPath;
-    protected string $tuliproxHost;
-    protected int $tuliproxPort;
+    protected string $apiProxyYmlPath;
+    protected ChannelFilterBuilder $filterBuilder;
 
-    public function __construct()
+    public function __construct(ChannelFilterBuilder $filterBuilder)
     {
         $this->configPath = env('TULIPROX_CONFIG_PATH', '/opt/tuliprox/config');
         $this->userYmlPath = $this->configPath . '/user.yml';
         $this->sourceYmlPath = $this->configPath . '/source.yml';
-        $this->tuliproxHost = env('TULIPROX_HOST', 'tuliprox');
-        $this->tuliproxPort = (int) env('TULIPROX_PORT', 8901);
+        $this->apiProxyYmlPath = $this->configPath . '/api-proxy.yml';
+        $this->filterBuilder = $filterBuilder;
     }
 
     /**
-     * Add a single user to user.yml
+     * Sync all configuration files
      */
-    public function addUser(IptvUser $user): bool
+    public function syncAll(): bool
     {
         try {
-            if (!$user->is_active) {
-                Log::info("Tuliprox: Skipping inactive user {$user->username}");
+            $this->syncSources();
+            $this->syncUsers();
+            $this->syncApiProxy();
+
+            Log::info('Tuliprox: All configuration files synced successfully');
+            return true;
+        } catch (\Exception $e) {
+            Log::error('Tuliprox: Failed to sync all files: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Sync source.yml - M3U sources with inputs and targets
+     */
+    public function syncSources(): bool
+    {
+        try {
+            $sources = M3uSource::where('is_active', true)->get();
+
+            if ($sources->isEmpty()) {
+                Log::warning('Tuliprox: No active M3U sources found');
+                $this->writeSourceYml([]);
                 return true;
             }
 
-            $users = $this->readUserYml();
-
-            // Add or update the user
-            $users[$user->username] = [
-                'username' => $user->username,
-                'password' => $user->password,
-                'token' => $user->username, // token same as username
-                'targets' => ['server1'],
-            ];
-
-            $this->writeUserYml($users);
-
-            Log::info("Tuliprox: Added/updated user {$user->username}");
-            return true;
-        } catch (\Exception $e) {
-            Log::error("Tuliprox: Failed to add user {$user->username}: " . $e->getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * Remove a user from user.yml
-     */
-    public function removeUser(IptvUser $user): bool
-    {
-        try {
-            $users = $this->readUserYml();
-
-            if (isset($users[$user->username])) {
-                unset($users[$user->username]);
-                $this->writeUserYml($users);
-                Log::info("Tuliprox: Removed user {$user->username}");
-            }
-
-            return true;
-        } catch (\Exception $e) {
-            Log::error("Tuliprox: Failed to remove user {$user->username}: " . $e->getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * Sync all active users to user.yml
-     */
-    public function syncAllUsers(): bool
-    {
-        try {
-            $activeUsers = IptvUser::where('is_active', true)->get();
-
-            $users = [];
-            foreach ($activeUsers as $user) {
-                $users[$user->username] = [
-                    'username' => $user->username,
-                    'password' => $user->password,
-                    'token' => $user->username,
-                    'targets' => ['server1'],
-                ];
-            }
-
-            $this->writeUserYml($users);
-
-            Log::info("Tuliprox: Synced " . count($users) . " active users");
-            return true;
-        } catch (\Exception $e) {
-            Log::error("Tuliprox: Failed to sync all users: " . $e->getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * Sync M3U sources to source.yml
-     */
-    public function syncSources(Collection $sources = null): bool
-    {
-        try {
-            if ($sources === null) {
-                $sources = M3uSource::where('is_active', true)->get();
-            }
-
-            $sourceConfig = [];
+            $sourcesArray = [];
 
             foreach ($sources as $source) {
-                // Generate a safe key from the source name
-                $sourceKey = $this->generateSourceKey($source->name);
+                $targetName = $source->target_name;
 
-                // Determine the input URL/path
+                // Determine input URL
                 $inputUrl = $source->source_type === 'file'
                     ? $source->file_path
                     : $source->url;
@@ -132,36 +74,43 @@ class TuliproxService
                     continue;
                 }
 
-                $sourceConfig[$sourceKey] = [
-                    'enabled' => $source->is_active,
-                    'input' => [
-                        'type' => 'xtream',
-                        'url' => $inputUrl,
-                    ],
-                    'filter' => [
-                        'group' => 'Group ~ ".*"', // Match all groups
-                    ],
+                // Build input configuration
+                $input = [
+                    'name' => $targetName,
+                    'type' => 'm3u',
+                    'url' => $inputUrl,
+                ];
+
+                // Add provider credentials if available (decrypt them)
+                if ($source->provider_username && $source->provider_password) {
+                    try {
+                        $input['username'] = Crypt::decryptString($source->provider_username);
+                        $input['password'] = Crypt::decryptString($source->provider_password);
+                    } catch (\Exception $e) {
+                        Log::warning("Tuliprox: Failed to decrypt credentials for source {$source->name}");
+                    }
+                }
+
+                // Build target configuration
+                $target = [
+                    'name' => $targetName,
+                    'enabled' => true,
+                    'filter' => 'Group ~ ".*"', // Match all at source level, filter per-user
                     'output' => [
-                        'type' => 'xtream',
-                        'name' => $source->name,
+                        ['type' => 'xtream'],
                     ],
                 ];
 
-                // Add provider credentials if available (decrypt them first)
-                if ($source->provider_username && $source->provider_password) {
-                    try {
-                        $sourceConfig[$sourceKey]['input']['username'] = Crypt::decryptString($source->provider_username);
-                        $sourceConfig[$sourceKey]['input']['password'] = Crypt::decryptString($source->provider_password);
-                    } catch (\Exception $e) {
-                        Log::warning("Tuliprox: Failed to decrypt credentials for source {$source->name}: " . $e->getMessage());
-                        // Skip credentials if decryption fails
-                    }
-                }
+                // Add to sources array
+                $sourcesArray[] = [
+                    'inputs' => [$input],
+                    'targets' => [$target],
+                ];
             }
 
-            $this->writeSourceYml($sourceConfig);
+            $this->writeSourceYml(['sources' => $sourcesArray]);
 
-            Log::info("Tuliprox: Synced " . count($sourceConfig) . " sources");
+            Log::info("Tuliprox: Synced " . count($sourcesArray) . " sources to source.yml");
             return true;
         } catch (\Exception $e) {
             Log::error("Tuliprox: Failed to sync sources: " . $e->getMessage());
@@ -170,51 +119,169 @@ class TuliproxService
     }
 
     /**
-     * Generate a safe source key from name
+     * Sync user.yml - User credentials and target assignments
      */
-    protected function generateSourceKey(string $name): string
+    public function syncUsers(): bool
     {
-        return strtolower(preg_replace('/[^a-zA-Z0-9]+/', '_', $name));
-    }
+        try {
+            $users = IptvUser::where('is_active', true)
+                ->with('m3uSource')
+                ->get();
 
-    /**
-     * Read user.yml file
-     */
-    protected function readUserYml(): array
-    {
-        if (!file_exists($this->userYmlPath)) {
-            return [];
+            $userConfig = [];
+
+            foreach ($users as $user) {
+                if (!$user->m3uSource) {
+                    Log::warning("Tuliprox: Skipping user {$user->username} - no M3U source assigned");
+                    continue;
+                }
+
+                $targetName = $user->m3uSource->target_name;
+
+                $userConfig[$user->username] = [
+                    'username' => $user->username,
+                    'password' => $user->password,
+                    'token' => $user->username,
+                    'targets' => [$targetName],
+                ];
+            }
+
+            $this->writeUserYml($userConfig);
+
+            Log::info("Tuliprox: Synced " . count($userConfig) . " users to user.yml");
+            return true;
+        } catch (\Exception $e) {
+            Log::error("Tuliprox: Failed to sync users: " . $e->getMessage());
+            return false;
         }
-
-        $content = file_get_contents($this->userYmlPath);
-        $parsed = Yaml::parse($content);
-
-        return $parsed ?? [];
     }
 
     /**
-     * Write user.yml file
+     * Sync api-proxy.yml - Servers and user credentials with per-user filters
      */
-    protected function writeUserYml(array $users): void
+    public function syncApiProxy(): bool
     {
-        $this->ensureConfigDirectory();
+        try {
+            // Get all active servers
+            $servers = TuliproxServer::where('is_active', true)->get();
 
-        $yaml = Yaml::dump($users, 4, 2);
-        file_put_contents($this->userYmlPath, $yaml);
+            if ($servers->isEmpty()) {
+                Log::warning('Tuliprox: No active servers found');
+                $this->writeApiProxyYml(['server' => [], 'user' => []]);
+                return true;
+            }
+
+            // Build server configuration
+            $serverConfig = $servers->map(function ($server) {
+                return [
+                    'name' => $server->name,
+                    'protocol' => $server->protocol,
+                    'host' => $server->host,
+                    'port' => $server->port,
+                    'timezone' => $server->timezone,
+                    'message' => $server->message ?? 'Welcome to Tuliprox',
+                ];
+            })->toArray();
+
+            // Build user configuration grouped by target
+            $users = IptvUser::where('is_active', true)
+                ->with(['m3uSource', 'tuliproxServer', 'channels'])
+                ->get();
+
+            // Group users by their target (M3U source)
+            $usersByTarget = $users->groupBy(function ($user) {
+                return $user->m3uSource?->target_name;
+            });
+
+            $userConfig = [];
+
+            foreach ($usersByTarget as $targetName => $targetUsers) {
+                if (!$targetName) {
+                    continue;
+                }
+
+                $credentials = [];
+
+                foreach ($targetUsers as $user) {
+                    // Get server name (use default if not assigned)
+                    $serverName = $user->tuliproxServer?->name
+                        ?? $servers->where('is_default', true)->first()?->name
+                        ?? $servers->first()?->name;
+
+                    if (!$serverName) {
+                        Log::warning("Tuliprox: No server available for user {$user->username}");
+                        continue;
+                    }
+
+                    // Build user filter from channel selection
+                    $filter = $this->filterBuilder->buildForUser($user);
+
+                    // Calculate expiration timestamp
+                    $expDate = $user->expires_at ? $user->expires_at->timestamp : 0;
+
+                    $credentials[] = [
+                        'username' => $user->username,
+                        'password' => $user->password,
+                        'token' => $user->username,
+                        'proxy' => 'reverse',
+                        'server' => $serverName,
+                        'exp_date' => $expDate,
+                        'max_connections' => $user->max_connections ?? 1,
+                        'status' => $user->isValid() ? 'Active' : 'Disabled',
+                        'filter' => $filter,
+                        'ui_enabled' => true,
+                    ];
+                }
+
+                if (!empty($credentials)) {
+                    $userConfig[] = [
+                        'target' => $targetName,
+                        'credentials' => $credentials,
+                    ];
+                }
+            }
+
+            $this->writeApiProxyYml([
+                'server' => $serverConfig,
+                'user' => $userConfig,
+            ]);
+
+            Log::info("Tuliprox: Synced api-proxy.yml with " . count($serverConfig) . " servers and " . $users->count() . " users");
+            return true;
+        } catch (\Exception $e) {
+            Log::error("Tuliprox: Failed to sync api-proxy: " . $e->getMessage());
+            return false;
+        }
     }
 
     /**
      * Write source.yml file
      */
-    protected function writeSourceYml(array $sources): void
+    protected function writeSourceYml(array $data): void
     {
         $this->ensureConfigDirectory();
-
-        // Tuliprox expects sources to be wrapped in a 'sources' key
-        $config = ['sources' => $sources];
-
-        $yaml = Yaml::dump($config, 6, 2);
+        $yaml = Yaml::dump($data, 6, 2, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK);
         file_put_contents($this->sourceYmlPath, $yaml);
+    }
+
+    /**
+     * Write user.yml file
+     */
+    protected function writeUserYml(array $data): void
+    {
+        $this->ensureConfigDirectory();
+        $yaml = Yaml::dump($data, 4, 2);
+        file_put_contents($this->userYmlPath, $yaml);
+    }
+
+    /**
+     * Write api-proxy.yml file
+     */
+    protected function writeApiProxyYml(array $data): void
+    {
+        $this->ensureConfigDirectory();
+        $yaml = Yaml::dump($data, 6, 2, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK);
+        file_put_contents($this->apiProxyYmlPath, $yaml);
     }
 
     /**
@@ -233,10 +300,11 @@ class TuliproxService
     public function getStats(): ?array
     {
         try {
-            $url = "http://{$this->tuliproxHost}:{$this->tuliproxPort}/api/v1/playlist/stats";
+            $host = env('TULIPROX_HOST', 'tuliprox');
+            $port = env('TULIPROX_PORT', 8901);
+            $url = "http://{$host}:{$port}/api/v1/playlist/stats";
 
-            $response = \Illuminate\Support\Facades\Http::timeout(5)
-                ->get($url);
+            $response = \Illuminate\Support\Facades\Http::timeout(5)->get($url);
 
             if ($response->successful()) {
                 return $response->json();
