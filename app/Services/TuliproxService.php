@@ -260,7 +260,7 @@ class TuliproxService
     protected function writeSourceYml(array $data): void
     {
         $this->ensureConfigDirectory();
-        $yaml = Yaml::dump($data, 6, 2, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK);
+        $yaml = Yaml::dump($data, 6, 2, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK | Yaml::DUMP_EMPTY_ARRAY_AS_SEQUENCE);
         file_put_contents($this->sourceYmlPath, $yaml);
     }
 
@@ -280,7 +280,7 @@ class TuliproxService
     protected function writeApiProxyYml(array $data): void
     {
         $this->ensureConfigDirectory();
-        $yaml = Yaml::dump($data, 6, 2, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK);
+        $yaml = Yaml::dump($data, 6, 2, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK | Yaml::DUMP_EMPTY_ARRAY_AS_SEQUENCE);
         file_put_contents($this->apiProxyYmlPath, $yaml);
     }
 
