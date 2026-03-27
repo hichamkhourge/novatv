@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\IptvUser;
 use App\Models\M3uSource;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Yaml\Yaml;
 
@@ -146,10 +147,15 @@ class TuliproxService
                     ],
                 ];
 
-                // Add provider credentials if available
+                // Add provider credentials if available (decrypt them first)
                 if ($source->provider_username && $source->provider_password) {
-                    $sourceConfig[$sourceKey]['input']['username'] = $source->provider_username;
-                    $sourceConfig[$sourceKey]['input']['password'] = $source->provider_password;
+                    try {
+                        $sourceConfig[$sourceKey]['input']['username'] = Crypt::decryptString($source->provider_username);
+                        $sourceConfig[$sourceKey]['input']['password'] = Crypt::decryptString($source->provider_password);
+                    } catch (\Exception $e) {
+                        Log::warning("Tuliprox: Failed to decrypt credentials for source {$source->name}: " . $e->getMessage());
+                        // Skip credentials if decryption fails
+                    }
                 }
             }
 
@@ -204,7 +210,10 @@ class TuliproxService
     {
         $this->ensureConfigDirectory();
 
-        $yaml = Yaml::dump($sources, 6, 2);
+        // Tuliprox expects sources to be wrapped in a 'sources' key
+        $config = ['sources' => $sources];
+
+        $yaml = Yaml::dump($config, 6, 2);
         file_put_contents($this->sourceYmlPath, $yaml);
     }
 
