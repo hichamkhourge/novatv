@@ -10,14 +10,19 @@ use Symfony\Component\Yaml\Yaml;
 
 class TuliproxService
 {
-    protected string $configPath = '/opt/tuliprox/config';
+    protected string $configPath;
     protected string $userYmlPath;
     protected string $sourceYmlPath;
+    protected string $tuliproxHost;
+    protected int $tuliproxPort;
 
     public function __construct()
     {
+        $this->configPath = env('TULIPROX_CONFIG_PATH', '/opt/tuliprox/config');
         $this->userYmlPath = $this->configPath . '/user.yml';
         $this->sourceYmlPath = $this->configPath . '/source.yml';
+        $this->tuliproxHost = env('TULIPROX_HOST', 'tuliprox');
+        $this->tuliproxPort = (int) env('TULIPROX_PORT', 8901);
     }
 
     /**
@@ -219,8 +224,10 @@ class TuliproxService
     public function getStats(): ?array
     {
         try {
+            $url = "http://{$this->tuliproxHost}:{$this->tuliproxPort}/api/v1/playlist/stats";
+
             $response = \Illuminate\Support\Facades\Http::timeout(5)
-                ->get('http://tuliprox:8901/api/v1/playlist/stats');
+                ->get($url);
 
             if ($response->successful()) {
                 return $response->json();
