@@ -5,8 +5,10 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\IptvUserResource\Pages;
 use App\Filament\Resources\IptvUserResource\RelationManagers;
 use App\Models\IptvUser;
+use App\Services\TuliproxService;
 use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -202,6 +204,32 @@ class IptvUserResource extends Resource
                 Tables\Filters\TernaryFilter::make('is_active'),
             ])
             ->actions([
+                Tables\Actions\Action::make('sync_tuliprox')
+                    ->label('Sync to Tuliprox')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('info')
+                    ->action(function () {
+                        try {
+                            $tuliproxService = app(TuliproxService::class);
+                            $tuliproxService->syncAll();
+
+                            Notification::make()
+                                ->title('Tuliprox Configuration Synced')
+                                ->success()
+                                ->body('All Tuliprox configuration files have been updated successfully.')
+                                ->send();
+                        } catch (\Exception $e) {
+                            Notification::make()
+                                ->title('Sync Failed')
+                                ->danger()
+                                ->body('Failed to sync Tuliprox configuration: ' . $e->getMessage())
+                                ->send();
+                        }
+                    })
+                    ->requiresConfirmation()
+                    ->modalHeading('Sync Tuliprox Configuration')
+                    ->modalDescription('This will regenerate all Tuliprox configuration files (user.yml, source.yml, api-proxy.yml) based on current database state.')
+                    ->modalSubmitActionLabel('Sync Now'),
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
             ])

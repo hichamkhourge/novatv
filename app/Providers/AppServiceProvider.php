@@ -4,8 +4,10 @@ namespace App\Providers;
 
 use App\Models\IptvUser;
 use App\Models\M3uSource;
+use App\Models\TuliproxServer;
 use App\Observers\IptvUserObserver;
 use App\Observers\M3uSourceObserver;
+use App\Observers\TuliproxServerObserver;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 
@@ -32,5 +34,6 @@ class AppServiceProvider extends ServiceProvider
         // Register observers for tuliprox sync
         IptvUser::observe(IptvUserObserver::class);
         M3uSource::observe(M3uSourceObserver::class);
+        TuliproxServer::observe(TuliproxServerObserver::class);
     }
 }
