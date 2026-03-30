@@ -26,9 +26,6 @@ return Application::configure(basePath: dirname(__DIR__))
 
         // Cleanup old M3U temp files hourly
         $schedule->command('m3u:clean-temp')->hourly();
-
-        // Cleanup stale sessions every minute
-        $schedule->command('iptv:cleanup-sessions')->everyMinute();
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //

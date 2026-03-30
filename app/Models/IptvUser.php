@@ -38,11 +38,11 @@ class IptvUser extends Model
     }
 
     /**
-     * Stream sessions for this user
+     * Connection logs for this user
      */
-    public function streamSessions(): HasMany
+    public function connectionLogs(): HasMany
     {
-        return $this->hasMany(StreamSession::class);
+        return $this->hasMany(ConnectionLog::class);
     }
 
     /**

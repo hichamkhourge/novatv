@@ -99,9 +99,15 @@ class IptvUserResource extends Resource
                         'secondary' => 'Inactive',
                     ]),
 
-                Tables\Columns\TextColumn::make('m3uSources_count')
-                    ->counts('m3uSources')
+                Tables\Columns\TextColumn::make('sources_count')
                     ->label('Sources')
+                    ->getStateUsing(function (IptvUser $record): string {
+                        try {
+                            return (string) $record->m3uSources()->count();
+                        } catch (\Exception $e) {
+                            return '0';
+                        }
+                    })
                     ->alignCenter(),
 
                 Tables\Columns\TextColumn::make('max_connections')
