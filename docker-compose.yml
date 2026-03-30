@@ -28,13 +28,9 @@ services:
             - SESSION_DOMAIN=${SESSION_DOMAIN}
             - SANCTUM_STATEFUL_DOMAINS=${SANCTUM_STATEFUL_DOMAINS}
             - TRUSTED_PROXIES=*
-            - TULIPROX_HOST=${TULIPROX_HOST}
-            - TULIPROX_PORT=${TULIPROX_PORT}
-            - TULIPROX_CONFIG_PATH=${TULIPROX_CONFIG_PATH}
         volumes:
             - storage_data:/var/www/html/storage
             - bootstrap_cache:/var/www/html/bootstrap/cache
-            - /opt/tuliprox/config:/opt/tuliprox/config:rw
         depends_on:
             postgres:
                 condition: service_healthy
@@ -131,13 +127,9 @@ services:
             - REDIS_PASSWORD=null
             - QUEUE_CONNECTION=redis
             - LOG_CHANNEL=stack
-            - TULIPROX_HOST=${TULIPROX_HOST}
-            - TULIPROX_PORT=${TULIPROX_PORT}
-            - TULIPROX_CONFIG_PATH=${TULIPROX_CONFIG_PATH}
         volumes:
             - storage_data:/var/www/html/storage
             - bootstrap_cache:/var/www/html/bootstrap/cache
-            - /opt/tuliprox/config:/opt/tuliprox/config:rw
         depends_on:
             app:
                 condition: service_started
@@ -171,13 +163,9 @@ services:
             - REDIS_PASSWORD=null
             - QUEUE_CONNECTION=redis
             - LOG_CHANNEL=stack
-            - TULIPROX_HOST=${TULIPROX_HOST}
-            - TULIPROX_PORT=${TULIPROX_PORT}
-            - TULIPROX_CONFIG_PATH=${TULIPROX_CONFIG_PATH}
         volumes:
             - storage_data:/var/www/html/storage
             - bootstrap_cache:/var/www/html/bootstrap/cache
-            - /opt/tuliprox/config:/opt/tuliprox/config:rw
         depends_on:
             app:
                 condition: service_started

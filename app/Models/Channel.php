@@ -2,20 +2,23 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Channel extends Model
 {
+    use SoftDeletes;
+
     protected $fillable = [
-        'name',
-        'tvg_id',
-        'tvg_name',
-        'tvg_logo',
-        'group_name',
-        'stream_url',
         'm3u_source_id',
+        'stream_id',
+        'name',
+        'stream_url',
+        'logo',
+        'category',
+        'epg_id',
         'is_active',
     ];
 
@@ -32,34 +35,10 @@ class Channel extends Model
     }
 
     /**
-     * Get the users that have access to this channel
+     * Scope to filter by active channels only
      */
-    public function iptvUsers(): BelongsToMany
-    {
-        return $this->belongsToMany(IptvUser::class, 'iptv_user_channel');
-    }
-
-    /**
-     * Scope to filter by group name
-     */
-    public function scopeByGroup($query, string $groupName)
-    {
-        return $query->where('group_name', $groupName);
-    }
-
-    /**
-     * Scope to filter by active channels
-     */
-    public function scopeActive($query)
+    public function scopeActive(Builder $query): Builder
     {
         return $query->where('is_active', true);
-    }
-
-    /**
-     * Scope to filter by M3U source
-     */
-    public function scopeBySource($query, int $sourceId)
-    {
-        return $query->where('m3u_source_id', $sourceId);
     }
 }

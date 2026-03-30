@@ -3,9 +3,9 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Collection;
 
 class IptvUser extends Model
 {
@@ -16,9 +16,6 @@ class IptvUser extends Model
         'max_connections',
         'is_active',
         'expires_at',
-        'package_id',
-        'm3u_source_id',
-        'tuliprox_server_id',
         'notes',
     ];
 
@@ -31,38 +28,53 @@ class IptvUser extends Model
         'password',
     ];
 
-    public function package(): BelongsTo
+    /**
+     * M3U sources linked to this user (many-to-many)
+     */
+    public function m3uSources(): BelongsToMany
     {
-        return $this->belongsTo(Package::class);
+        return $this->belongsToMany(M3uSource::class, 'user_sources')
+            ->withTimestamps();
     }
 
-    public function m3uSource(): BelongsTo
-    {
-        return $this->belongsTo(M3uSource::class);
-    }
-
-    public function tuliproxServer(): BelongsTo
-    {
-        return $this->belongsTo(TuliproxServer::class);
-    }
-
+    /**
+     * Stream sessions for this user
+     */
     public function streamSessions(): HasMany
     {
         return $this->hasMany(StreamSession::class);
     }
 
-    public function channels(): BelongsToMany
-    {
-        return $this->belongsToMany(Channel::class, 'iptv_user_channel');
-    }
-
+    /**
+     * Check if user subscription is expired
+     */
     public function isExpired(): bool
     {
         return $this->expires_at && $this->expires_at->isPast();
     }
 
+    /**
+     * Check if user is valid (active and not expired)
+     */
     public function isValid(): bool
     {
         return $this->is_active && !$this->isExpired();
+    }
+
+    /**
+     * Get all active channels from all linked M3U sources
+     * Returns a merged collection of channels
+     */
+    public function allChannels(): Collection
+    {
+        return $this->m3uSources()
+            ->where('is_active', true)
+            ->with(['channels' => function ($query) {
+                $query->active()->whereNull('deleted_at');
+            }])
+            ->get()
+            ->pluck('channels')
+            ->flatten()
+            ->unique('id');
     }
 }
