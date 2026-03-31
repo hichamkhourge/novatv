@@ -64,14 +64,29 @@ class SyncM3uSourceJob implements ShouldQueue
         );
 
         try {
-            // Step 1: Download M3U file
-            Log::info("Sync M3U: Starting download", [
-                'source_id' => $this->sourceId,
-                'url' => $source->url,
-            ]);
+            // Step 1: Get M3U file (download from URL or use uploaded file)
+            if ($source->isFileSource()) {
+                // Use uploaded file
+                $tempFilePath = $source->getFullFilePath();
 
-            $downloader = new M3uDownloader();
-            $tempFilePath = $downloader->download($this->sourceId, $source->url);
+                if (!$tempFilePath || !file_exists($tempFilePath)) {
+                    throw new \Exception("M3U file not found at: " . ($source->file_path ?? 'null'));
+                }
+
+                Log::info("Sync M3U: Using uploaded file", [
+                    'source_id' => $this->sourceId,
+                    'file_path' => $source->file_path,
+                ]);
+            } else {
+                // Download from URL
+                Log::info("Sync M3U: Starting download", [
+                    'source_id' => $this->sourceId,
+                    'url' => $source->url,
+                ]);
+
+                $downloader = new M3uDownloader();
+                $tempFilePath = $downloader->download($this->sourceId, $source->url);
+            }
 
             // Step 2: Parse M3U file in chunks
             Log::info("Sync M3U: Starting parse", [
@@ -101,13 +116,14 @@ class SyncM3uSourceJob implements ShouldQueue
             ]);
 
             // Step 3: Dispatch batch of chunk parsing jobs
+            $isFileSource = $source->isFileSource();
             $batch = Bus::batch($chunkJobs)
                 ->name("Sync M3U Source {$this->sourceId}")
-                ->then(function () use ($source, $tempFilePath, $syncStartedAt) {
-                    $this->onBatchComplete($source, $tempFilePath, $syncStartedAt);
+                ->then(function () use ($source, $tempFilePath, $syncStartedAt, $isFileSource) {
+                    $this->onBatchComplete($source, $tempFilePath, $syncStartedAt, $isFileSource);
                 })
-                ->catch(function (\Throwable $e) use ($source, $tempFilePath) {
-                    $this->onBatchFailed($source, $tempFilePath, $e);
+                ->catch(function (\Throwable $e) use ($source, $tempFilePath, $isFileSource) {
+                    $this->onBatchFailed($source, $tempFilePath, $e, $isFileSource);
                 })
                 ->dispatch();
 
@@ -127,8 +143,8 @@ class SyncM3uSourceJob implements ShouldQueue
                 'error_message' => $e->getMessage(),
             ]);
 
-            // Cleanup temp file
-            if ($tempFilePath) {
+            // Cleanup temp file (only for URL downloads, not uploaded files)
+            if ($tempFilePath && !$source->isFileSource()) {
                 (new M3uDownloader())->cleanup($tempFilePath);
             }
 
@@ -140,7 +156,7 @@ class SyncM3uSourceJob implements ShouldQueue
     /**
      * Handle successful batch completion
      */
-    private function onBatchComplete(M3uSource $source, string $tempFilePath, \Carbon\Carbon $syncStartedAt): void
+    private function onBatchComplete(M3uSource $source, string $tempFilePath, \Carbon\Carbon $syncStartedAt, bool $isFileSource = false): void
     {
         Log::info("Sync M3U: Batch completed", ['source_id' => $source->id]);
 
@@ -181,8 +197,10 @@ class SyncM3uSourceJob implements ShouldQueue
             ]);
         }
 
-        // Cleanup temp file
-        (new M3uDownloader())->cleanup($tempFilePath);
+        // Cleanup temp file (only for URL downloads, not uploaded files)
+        if (!$isFileSource && $tempFilePath) {
+            (new M3uDownloader())->cleanup($tempFilePath);
+        }
 
         // Clear Redis progress (keep for 5 minutes for UI to read)
         Redis::expire("m3u_sync:{$source->id}", 300);
@@ -191,7 +209,7 @@ class SyncM3uSourceJob implements ShouldQueue
     /**
      * Handle batch failure
      */
-    private function onBatchFailed(M3uSource $source, ?string $tempFilePath, \Throwable $e): void
+    private function onBatchFailed(M3uSource $source, ?string $tempFilePath, \Throwable $e, bool $isFileSource = false): void
     {
         Log::error("Sync M3U: Batch failed", [
             'source_id' => $source->id,
@@ -203,8 +221,8 @@ class SyncM3uSourceJob implements ShouldQueue
             'error_message' => "Batch processing failed: {$e->getMessage()}",
         ]);
 
-        // Cleanup temp file
-        if ($tempFilePath) {
+        // Cleanup temp file (only for URL downloads, not uploaded files)
+        if (!$isFileSource && $tempFilePath) {
             (new M3uDownloader())->cleanup($tempFilePath);
         }
 

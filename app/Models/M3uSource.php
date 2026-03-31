@@ -12,6 +12,8 @@ class M3uSource extends Model
     protected $fillable = [
         'name',
         'url',
+        'source_type',
+        'file_path',
         'status',
         'is_active',
         'channels_count',
@@ -28,6 +30,7 @@ class M3uSource extends Model
         'status' => 'idle',
         'is_active' => true,
         'channels_count' => 0,
+        'source_type' => 'url',
     ];
 
     /**
@@ -45,6 +48,26 @@ class M3uSource extends Model
     {
         return $this->belongsToMany(IptvUser::class, 'user_sources')
             ->withTimestamps();
+    }
+
+    /**
+     * Check if this source uses a file upload
+     */
+    public function isFileSource(): bool
+    {
+        return $this->source_type === 'file';
+    }
+
+    /**
+     * Get the full path to the uploaded file
+     */
+    public function getFullFilePath(): ?string
+    {
+        if (!$this->isFileSource() || !$this->file_path) {
+            return null;
+        }
+
+        return storage_path('app/' . $this->file_path);
     }
 
     /**

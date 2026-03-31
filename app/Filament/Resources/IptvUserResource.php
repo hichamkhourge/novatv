@@ -61,6 +61,47 @@ class IptvUserResource extends Resource
                             ->seconds(false),
                     ])->columns(3),
 
+                Forms\Components\Section::make('M3U Source')
+                    ->description('Upload an M3U file or provide a URL for this user\'s channels')
+                    ->schema([
+                        Forms\Components\Radio::make('m3u_source_type')
+                            ->label('Source Type')
+                            ->options([
+                                'file' => 'Upload M3U File',
+                                'url' => 'M3U URL',
+                            ])
+                            ->default('file')
+                            ->live()
+                            ->required()
+                            ->columnSpanFull(),
+
+                        Forms\Components\FileUpload::make('m3u_file')
+                            ->label('M3U File')
+                            ->disk('local')
+                            ->directory('m3u-uploads')
+                            ->acceptedFileTypes(['application/x-mpegURL', 'audio/x-mpegurl', 'text/plain', '.m3u', '.m3u8'])
+                            ->maxSize(102400) // 100MB
+                            ->visible(fn (Forms\Get $get) => $get('m3u_source_type') === 'file')
+                            ->required(fn (Forms\Get $get) => $get('m3u_source_type') === 'file')
+                            ->helperText('Upload an M3U playlist file (max 100MB)')
+                            ->columnSpanFull(),
+
+                        Forms\Components\TextInput::make('m3u_url')
+                            ->label('M3U URL')
+                            ->url()
+                            ->maxLength(1000)
+                            ->visible(fn (Forms\Get $get) => $get('m3u_source_type') === 'url')
+                            ->required(fn (Forms\Get $get) => $get('m3u_source_type') === 'url')
+                            ->helperText('Enter the URL to the M3U playlist')
+                            ->columnSpanFull(),
+
+                        Forms\Components\TextInput::make('m3u_name')
+                            ->label('Source Name (Optional)')
+                            ->maxLength(255)
+                            ->helperText('Leave empty to auto-generate from username')
+                            ->columnSpanFull(),
+                    ])->collapsible(),
+
                 Forms\Components\Section::make('Notes')
                     ->schema([
                         Forms\Components\Textarea::make('notes')

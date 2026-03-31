@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Collection;
@@ -17,6 +18,7 @@ class IptvUser extends Model
         'is_active',
         'expires_at',
         'notes',
+        'm3u_source_id',
     ];
 
     protected $casts = [
@@ -35,6 +37,14 @@ class IptvUser extends Model
     {
         return $this->belongsToMany(M3uSource::class, 'user_sources')
             ->withTimestamps();
+    }
+
+    /**
+     * Dedicated M3U source for this user (one-to-one)
+     */
+    public function m3uSource(): BelongsTo
+    {
+        return $this->belongsTo(M3uSource::class);
     }
 
     /**
@@ -67,12 +77,25 @@ class IptvUser extends Model
      */
     public function allChannels(): Collection
     {
-        return $this->m3uSources()
+        $sources = collect();
+
+        // Include dedicated M3U source if exists
+        if ($this->m3u_source_id && $this->m3uSource) {
+            $sources->push($this->m3uSource);
+        }
+
+        // Include many-to-many sources (for backward compatibility)
+        $manyToManySources = $this->m3uSources()
             ->where('is_active', true)
             ->with(['channels' => function ($query) {
                 $query->active()->whereNull('deleted_at');
             }])
-            ->get()
+            ->get();
+
+        $sources = $sources->merge($manyToManySources);
+
+        return $sources
+            ->where('is_active', true)
             ->pluck('channels')
             ->flatten()
             ->unique('id');
