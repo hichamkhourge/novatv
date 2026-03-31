@@ -10,6 +10,7 @@ use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Livewire\Component;
 
 class IptvUserResource extends Resource
 {
@@ -82,8 +83,7 @@ class IptvUserResource extends Resource
                             ->acceptedFileTypes(['application/x-mpegURL', 'audio/x-mpegurl', 'text/plain', '.m3u', '.m3u8'])
                             ->maxSize(102400) // 100MB
                             ->visible(fn (Forms\Get $get) => $get('m3u_source_type') === 'file')
-                            ->required(fn (Forms\Get $get) => $get('m3u_source_type') === 'file')
-                            ->helperText('Upload an M3U playlist file (max 100MB)')
+                            ->helperText('Upload an M3U playlist file (max 100MB). Leave empty to keep existing file.')
                             ->columnSpanFull(),
 
                         Forms\Components\TextInput::make('m3u_url')
@@ -91,7 +91,6 @@ class IptvUserResource extends Resource
                             ->url()
                             ->maxLength(1000)
                             ->visible(fn (Forms\Get $get) => $get('m3u_source_type') === 'url')
-                            ->required(fn (Forms\Get $get) => $get('m3u_source_type') === 'url')
                             ->helperText('Enter the URL to the M3U playlist')
                             ->columnSpanFull(),
 

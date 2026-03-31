@@ -57,67 +57,76 @@ class EditIptvUser extends EditRecord
         }
 
         try {
-            // Generate source name if not provided
-            $sourceName = $data['m3u_name'] ?? "{$user->username}'s M3U";
+            $shouldUpdate = false;
+            $shouldNotify = false;
 
             // Update or create M3U source
             if ($user->m3u_source_id && $user->m3uSource) {
                 // Update existing source
                 $m3uSource = $user->m3uSource;
 
-                if ($data['m3u_source_type'] === 'file' && isset($data['m3u_file'])) {
+                // Update source name if provided
+                if (isset($data['m3u_name']) && $data['m3u_name'] !== $m3uSource->name) {
+                    $m3uSource->update(['name' => $data['m3u_name']]);
+                }
+
+                // Handle file upload
+                if ($data['m3u_source_type'] === 'file' && isset($data['m3u_file']) && !empty($data['m3u_file'])) {
                     // File upload - handle array or string
                     $filePath = is_array($data['m3u_file'])
                         ? ($data['m3u_file'][0] ?? null)
                         : $data['m3u_file'];
 
-                    if (!$filePath) {
-                        throw new \Exception('No file uploaded');
+                    // Only update if a new file was uploaded (path changed)
+                    if ($filePath && $filePath !== $m3uSource->file_path) {
+                        $m3uSource->update([
+                            'source_type' => 'file',
+                            'file_path' => $filePath,
+                            'url' => null,
+                        ]);
+
+                        // Dispatch sync job for new file
+                        SyncM3uSourceJob::dispatch($m3uSource->id);
+                        $shouldNotify = true;
                     }
+                } elseif ($data['m3u_source_type'] === 'url' && isset($data['m3u_url']) && !empty($data['m3u_url'])) {
+                    // Only update if URL changed
+                    if ($data['m3u_url'] !== $m3uSource->url) {
+                        $m3uSource->update([
+                            'source_type' => 'url',
+                            'url' => $data['m3u_url'],
+                            'file_path' => null,
+                        ]);
 
-                    $m3uSource->update([
-                        'name' => $sourceName,
-                        'source_type' => 'file',
-                        'file_path' => $filePath,
-                        'url' => null,
-                    ]);
-
-                    // Dispatch sync job if file changed
-                    SyncM3uSourceJob::dispatch($m3uSource->id);
-                } elseif ($data['m3u_source_type'] === 'url' && isset($data['m3u_url'])) {
-                    $m3uSource->update([
-                        'name' => $sourceName,
-                        'source_type' => 'url',
-                        'url' => $data['m3u_url'],
-                        'file_path' => null,
-                    ]);
-
-                    // Dispatch sync job if URL changed
-                    SyncM3uSourceJob::dispatch($m3uSource->id);
+                        // Dispatch sync job for new URL
+                        SyncM3uSourceJob::dispatch($m3uSource->id);
+                        $shouldNotify = true;
+                    }
                 }
             } else {
-                // Create new source
-                if ($data['m3u_source_type'] === 'file' && isset($data['m3u_file'])) {
+                // Create new source only if file or URL is provided
+                $sourceName = $data['m3u_name'] ?? "{$user->username}'s M3U";
+
+                if ($data['m3u_source_type'] === 'file' && isset($data['m3u_file']) && !empty($data['m3u_file'])) {
                     // File upload - handle array or string
                     $filePath = is_array($data['m3u_file'])
                         ? ($data['m3u_file'][0] ?? null)
                         : $data['m3u_file'];
 
-                    if (!$filePath) {
-                        throw new \Exception('No file uploaded');
+                    if ($filePath) {
+                        $m3uSource = M3uSource::create([
+                            'name' => $sourceName,
+                            'source_type' => 'file',
+                            'file_path' => $filePath,
+                            'url' => null,
+                            'is_active' => true,
+                        ]);
+
+                        $user->update(['m3u_source_id' => $m3uSource->id]);
+                        SyncM3uSourceJob::dispatch($m3uSource->id);
+                        $shouldNotify = true;
                     }
-
-                    $m3uSource = M3uSource::create([
-                        'name' => $sourceName,
-                        'source_type' => 'file',
-                        'file_path' => $filePath,
-                        'url' => null,
-                        'is_active' => true,
-                    ]);
-
-                    $user->update(['m3u_source_id' => $m3uSource->id]);
-                    SyncM3uSourceJob::dispatch($m3uSource->id);
-                } elseif ($data['m3u_source_type'] === 'url' && isset($data['m3u_url'])) {
+                } elseif ($data['m3u_source_type'] === 'url' && isset($data['m3u_url']) && !empty($data['m3u_url'])) {
                     $m3uSource = M3uSource::create([
                         'name' => $sourceName,
                         'source_type' => 'url',
@@ -128,14 +137,17 @@ class EditIptvUser extends EditRecord
 
                     $user->update(['m3u_source_id' => $m3uSource->id]);
                     SyncM3uSourceJob::dispatch($m3uSource->id);
+                    $shouldNotify = true;
                 }
             }
 
-            Notification::make()
-                ->title('M3U source updated')
-                ->body('Changes are being synced in the background.')
-                ->success()
-                ->send();
+            if ($shouldNotify) {
+                Notification::make()
+                    ->title('M3U source updated')
+                    ->body('Changes are being synced in the background.')
+                    ->success()
+                    ->send();
+            }
         } catch (\Exception $e) {
             Notification::make()
                 ->title('Error updating M3U source')
