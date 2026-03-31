@@ -37,11 +37,19 @@ class CreateIptvUser extends CreateRecord
 
             // Create M3U source based on type
             if ($data['m3u_source_type'] === 'file' && isset($data['m3u_file'])) {
-                // File upload
+                // File upload - handle array or string
+                $filePath = is_array($data['m3u_file'])
+                    ? ($data['m3u_file'][0] ?? null)
+                    : $data['m3u_file'];
+
+                if (!$filePath) {
+                    throw new \Exception('No file uploaded');
+                }
+
                 $m3uSource = M3uSource::create([
                     'name' => $sourceName,
                     'source_type' => 'file',
-                    'file_path' => $data['m3u_file'],
+                    'file_path' => $filePath,
                     'url' => null,
                     'is_active' => true,
                 ]);
