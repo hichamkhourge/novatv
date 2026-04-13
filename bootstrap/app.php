@@ -1,9 +1,11 @@
 <?php
 
+use App\Models\IptvAccount;
+use App\Models\StreamSession;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
-use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Route;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -12,20 +14,34 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
         then: function () {
+            // IPTV client-facing routes (no auth middleware group — handled per-route)
             Route::middleware('web')
-                ->group(base_path('routes/xtream.php'));
+                ->group(base_path('routes/iptv.php'));
         },
     )
     ->withMiddleware(function (Middleware $middleware) {
         // Trust all proxies (Traefik) for proper HTTPS detection
-        $middleware->trustProxies(at: '*', headers: Illuminate\Http\Request::HEADER_X_FORWARDED_FOR | Illuminate\Http\Request::HEADER_X_FORWARDED_HOST | Illuminate\Http\Request::HEADER_X_FORWARDED_PORT | Illuminate\Http\Request::HEADER_X_FORWARDED_PROTO);
+        $middleware->trustProxies(
+            at: '*',
+            headers: Illuminate\Http\Request::HEADER_X_FORWARDED_FOR
+                | Illuminate\Http\Request::HEADER_X_FORWARDED_HOST
+                | Illuminate\Http\Request::HEADER_X_FORWARDED_PORT
+                | Illuminate\Http\Request::HEADER_X_FORWARDED_PROTO,
+        );
     })
     ->withSchedule(function (Schedule $schedule) {
-        // Sync M3U sources daily at 3 AM
-        $schedule->command('m3u:sync')->dailyAt('03:00');
+        // Purge stale stream sessions every minute (last_seen_at older than 60s)
+        $schedule->call(function () {
+            StreamSession::where('last_seen_at', '<', now()->subSeconds(60))->delete();
+        })->everyMinute()->name('purge-stale-sessions')->withoutOverlapping();
 
-        // Cleanup old M3U temp files hourly
-        $schedule->command('m3u:clean-temp')->hourly();
+        // Mark expired accounts daily
+        $schedule->call(function () {
+            IptvAccount::where('status', 'active')
+                ->whereNotNull('expires_at')
+                ->where('expires_at', '<', now())
+                ->update(['status' => 'expired']);
+        })->daily()->name('expire-iptv-accounts')->withoutOverlapping();
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //
