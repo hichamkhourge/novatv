@@ -194,19 +194,18 @@ class IptvController extends Controller
         return response()->json($streams);
     }
 
-    // -------------------------------------------------------------------------
-    // Stream Proxy
-    // -------------------------------------------------------------------------
-
     /**
-     * Proxy the upstream stream to the client without buffering.
+     * Proxy the upstream stream directly to the client.
      *
      * GET /live/{username}/{password}/{channel_id}.ts
      * GET /live/{username}/{password}/{channel_id}.m3u8
+     *
+     * We bypass Laravel's StreamedResponse here and write directly to output
+     * to avoid Symfony's response wrapper corrupting the raw binary stream.
      */
     public function streamProxy(Request $request, string $username, string $password, string $streamId): Response|StreamedResponse
     {
-        // Authenticate inline
+        // ── 1. Authenticate ──────────────────────────────────────────────────
         $account = IptvAccount::where('username', $username)
             ->where('password', $password)
             ->first();
@@ -215,23 +214,18 @@ class IptvController extends Controller
             return response('Unauthorized', 401, ['Content-Type' => 'text/plain']);
         }
 
-        // Parse channel id from "123.ts" or "123.m3u8"
+        // ── 2. Find channel ──────────────────────────────────────────────────
         $channelId = (int) preg_replace('/\.\w+$/', '', $streamId);
 
-        // Channel must belong to this account's source
         $channel = $this->accountChannels($account)
             ->where('channels.id', $channelId)
             ->first();
 
         if (! $channel || ! $channel->is_active) {
-            \Illuminate\Support\Facades\Log::warning('streamProxy: channel not found', [
-                'account'   => $username,
-                'channelId' => $channelId,
-            ]);
             return response('Channel not found', 404, ['Content-Type' => 'text/plain']);
         }
 
-        // Enforce max_connections
+        // ── 3. Connection limit ──────────────────────────────────────────────
         $ip             = $request->ip();
         $activeSessions = StreamSession::where('account_id', $account->id)
             ->where('last_seen_at', '>', now()->subSeconds(30))
@@ -242,95 +236,99 @@ class IptvController extends Controller
             return response('Max connections reached', 403, ['Content-Type' => 'text/plain']);
         }
 
-        // Upsert stream session
+        // ── 4. Register session ──────────────────────────────────────────────
         StreamSession::updateOrCreate(
             ['account_id' => $account->id, 'channel_id' => $channelId, 'ip_address' => $ip],
             ['started_at' => now(), 'last_seen_at' => now()],
         );
 
         $upstreamUrl = $channel->stream_url;
+        $accountId   = $account->id;
 
-        // Detect content type from the extension requested by the client
         $ext         = strtolower(pathinfo($streamId, PATHINFO_EXTENSION));
-        $contentType = match ($ext) {
-            'm3u8'  => 'application/vnd.apple.mpegurl',
-            default => 'video/mp2t',
-        };
+        $contentType = ($ext === 'm3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t';
 
-        $accountId = $account->id;
+        // ── 5. Stream — bypass Laravel response system ───────────────────────
+        // Send headers manually before any output
+        if (! headers_sent()) {
+            header('Content-Type: ' . $contentType);
+            header('Cache-Control: no-cache, no-store, must-revalidate');
+            header('Pragma: no-cache');
+            header('X-Accel-Buffering: no');
+        }
 
-        return response()->stream(function () use ($upstreamUrl, $accountId, $channelId, $ip) {
+        // Flush any output buffers so Nginx stops buffering immediately
+        while (ob_get_level() > 0) {
+            ob_end_flush();
+        }
+        flush();
 
-            // Cleanup session when client disconnects
-            register_shutdown_function(function () use ($accountId, $channelId, $ip) {
+        // Session cleanup on disconnect
+        register_shutdown_function(function () use ($accountId, $channelId, $ip) {
+            try {
+                StreamSession::where('account_id', $accountId)
+                    ->where('channel_id', $channelId)
+                    ->where('ip_address', $ip)
+                    ->delete();
+            } catch (\Throwable) {}
+        });
+
+        // Open cURL and pipe directly to PHP stdout
+        $ch = curl_init($upstreamUrl);
+
+        $output = fopen('php://output', 'wb');
+
+        curl_setopt_array($ch, [
+            CURLOPT_FILE           => $output,          // write to php://output directly
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_TIMEOUT        => 0,                // no read timeout for live streams
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_BUFFERSIZE     => 128 * 1024,       // 128 KB buffer for smooth playback
+            CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; IPTVProxy/1.0)',
+            CURLOPT_HTTPHEADER     => ['Accept: */*', 'Connection: keep-alive'],
+        ]);
+
+        // Periodically update last_seen_at using CURLOPT_PROGRESSFUNCTION
+        curl_setopt($ch, CURLOPT_NOPROGRESS, false);
+        $lastUpdate = time();
+        curl_setopt($ch, CURLOPT_PROGRESSFUNCTION, function (
+            $resource, $downloadSize, $downloaded, $uploadSize, $uploaded
+        ) use ($accountId, $channelId, $ip, &$lastUpdate) {
+            if (connection_aborted()) {
+                return 1; // Abort cURL
+            }
+            $now = time();
+            if ($now - $lastUpdate >= 10) {
                 try {
                     StreamSession::where('account_id', $accountId)
                         ->where('channel_id', $channelId)
                         ->where('ip_address', $ip)
-                        ->delete();
+                        ->update(['last_seen_at' => now()]);
                 } catch (\Throwable) {}
-            });
-
-            $ch = curl_init($upstreamUrl);
-
-            curl_setopt_array($ch, [
-                CURLOPT_RETURNTRANSFER => false,        // stream directly
-                CURLOPT_FOLLOWLOCATION => true,         // follow HTTP redirects
-                CURLOPT_MAXREDIRS      => 5,
-                CURLOPT_CONNECTTIMEOUT => 10,
-                CURLOPT_TIMEOUT        => 0,            // no read timeout (live stream)
-                CURLOPT_SSL_VERIFYPEER => false,        // allow self-signed upstream certs
-                CURLOPT_SSL_VERIFYHOST => false,
-                CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; IPTV Proxy)',
-                CURLOPT_HTTPHEADER     => [
-                    'Accept: */*',
-                    'Connection: keep-alive',
-                ],
-                CURLOPT_WRITEFUNCTION  => function ($curl, $data) use ($accountId, $channelId, $ip) {
-                    if (connection_aborted()) {
-                        return -1; // Signal cURL to stop
-                    }
-
-                    echo $data;
-                    flush();
-
-                    // Update last_seen_at every ~5s
-                    static $lastUpdate = 0;
-                    $now = time();
-                    if ($now - $lastUpdate >= 5) {
-                        try {
-                            StreamSession::where('account_id', $accountId)
-                                ->where('channel_id', $channelId)
-                                ->where('ip_address', $ip)
-                                ->update(['last_seen_at' => now()]);
-                        } catch (\Throwable) {}
-                        $lastUpdate = $now;
-                    }
-
-                    return strlen($data);
-                },
-            ]);
-
-            $result = curl_exec($ch);
-
-            if ($result === false) {
-                \Illuminate\Support\Facades\Log::warning('streamProxy: cURL failed', [
-                    'url'   => $upstreamUrl,
-                    'error' => curl_error($ch),
-                    'code'  => curl_errno($ch),
-                ]);
+                $lastUpdate = $now;
             }
+            return 0;
+        });
 
-            curl_close($ch);
+        $ok = curl_exec($ch);
 
-        }, 200, [
-            'Content-Type'      => $contentType,
-            'Cache-Control'     => 'no-cache, no-store',
-            'X-Accel-Buffering' => 'no', // Disable Nginx/proxy buffering
-            'Pragma'            => 'no-cache',
-        ]);
+        if ($ok === false) {
+            \Illuminate\Support\Facades\Log::warning('streamProxy: upstream failed', [
+                'url'   => $upstreamUrl,
+                'error' => curl_error($ch),
+                'errno' => curl_errno($ch),
+            ]);
+        }
+
+        curl_close($ch);
+        fclose($output);
+
+        // Return a null response — we already sent everything directly
+        return response('', 200);
     }
-
 
     // -------------------------------------------------------------------------
     // Helpers
