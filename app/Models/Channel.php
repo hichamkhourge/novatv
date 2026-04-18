@@ -10,6 +10,7 @@ class Channel extends Model
 {
     protected $fillable = [
         'channel_group_id',
+        'm3u_source_id',
         'name',
         'stream_url',
         'logo_url',
@@ -23,6 +24,12 @@ class Channel extends Model
         'is_active'  => 'boolean',
         'sort_order' => 'integer',
     ];
+
+    /** The M3U source this channel was imported from */
+    public function m3uSource(): BelongsTo
+    {
+        return $this->belongsTo(M3uSource::class);
+    }
 
     /** The channel group this channel belongs to */
     public function channelGroup(): BelongsTo

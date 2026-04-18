@@ -5,6 +5,7 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\IptvAccountResource\Pages;
 use App\Filament\Resources\IptvAccountResource\RelationManagers\ChannelGroupsRelationManager;
 use App\Models\IptvAccount;
+use App\Models\M3uSource;
 use Carbon\Carbon;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -36,6 +37,61 @@ class IptvAccountResource extends Resource
                     ->maxLength(255)
                     ->helperText('Stored in plaintext — IPTV clients send it in URLs'),
             ])->columns(2),
+
+            Forms\Components\Section::make('M3U Source')->schema([
+                Forms\Components\Select::make('m3u_source_id')
+                    ->label('Linked M3U Source')
+                    ->relationship('m3uSource', 'name')
+                    ->searchable()
+                    ->preload()
+                    ->required()
+                    ->createOptionForm([
+                        Forms\Components\TextInput::make('name')
+                            ->label('Source Name')
+                            ->required()
+                            ->maxLength(255),
+
+                        Forms\Components\Select::make('source_type')
+                            ->label('Type')
+                            ->options(['url' => 'URL', 'file' => 'File Upload'])
+                            ->default('url')
+                            ->required()
+                            ->live(),
+
+                        Forms\Components\TextInput::make('url')
+                            ->label('M3U URL')
+                            ->url()
+                            ->placeholder('http://provider.com/get.php?...')
+                            ->visible(fn (\Filament\Forms\Get $get) => $get('source_type') === 'url')
+                            ->requiredIf('source_type', 'url'),
+
+                        Forms\Components\FileUpload::make('file_path')
+                            ->label('M3U File')
+                            ->directory('m3u_sources')
+                            ->acceptedFileTypes(['audio/x-mpegurl', 'application/x-mpegurl', 'text/plain'])
+                            ->visible(fn (\Filament\Forms\Get $get) => $get('source_type') === 'file')
+                            ->requiredIf('source_type', 'file'),
+                    ])
+                    ->createOptionUsing(function (array $data): int {
+                        $source = M3uSource::create(array_merge($data, [
+                            'status'         => 'idle',
+                            'is_active'      => true,
+                            'channels_count' => 0,
+                        ]));
+
+                        // Auto-dispatch import job after inline creation
+                        $importSource = $source->source_type === 'file'
+                            ? $source->getFullFilePath()
+                            : $source->url;
+
+                        if ($importSource) {
+                            \App\Jobs\ImportM3uJob::dispatch($importSource, $source->id);
+                        }
+
+                        return $source->id;
+                    })
+                    ->helperText('Channels served to this client come from this M3U source'),
+            ])->columns(1),
 
             Forms\Components\Section::make('Subscription')->schema([
                 Forms\Components\Select::make('status')
@@ -77,6 +133,14 @@ class IptvAccountResource extends Resource
                     ->sortable()
                     ->copyable(),
 
+                Tables\Columns\TextColumn::make('m3uSource.name')
+                    ->label('M3U Source')
+                    ->searchable()
+                    ->sortable()
+                    ->badge()
+                    ->color('info')
+                    ->placeholder('— no source —'),
+
                 Tables\Columns\BadgeColumn::make('status')
                     ->colors([
                         'success' => 'active',
@@ -107,6 +171,7 @@ class IptvAccountResource extends Resource
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
+
             ->filters([
                 Tables\Filters\SelectFilter::make('status')
                     ->options([

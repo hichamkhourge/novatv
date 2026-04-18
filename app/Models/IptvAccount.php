@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -16,12 +17,22 @@ class IptvAccount extends Model
         'expires_at',
         'status',
         'notes',
+        'm3u_source_id',
     ];
 
     protected $casts = [
         'expires_at'      => 'datetime',
         'max_connections' => 'integer',
     ];
+
+    /**
+     * The M3U source this account is linked to.
+     * Channels served to this user come from this source only.
+     */
+    public function m3uSource(): BelongsTo
+    {
+        return $this->belongsTo(M3uSource::class);
+    }
 
     /**
      * Active stream sessions for this account.

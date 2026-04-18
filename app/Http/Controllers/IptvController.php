@@ -16,6 +16,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  *  - M3U playlist (/get.php)
  *  - Xtream Codes API (/player_api.php)
  *  - Stream proxy (/live/{username}/{password}/{id}.ts|m3u8)
+ *
+ * Channels are always scoped to the account's linked M3U source.
  */
 class IptvController extends Controller
 {
@@ -35,14 +37,11 @@ class IptvController extends Controller
 
         $this->logAccess($request, $account, 'playlist', 'ok');
 
-        $groupIds    = $account->resolvedChannelGroups()->pluck('id');
-        $channels    = Channel::active()
-            ->whereIn('channel_group_id', $groupIds)
+        $channels = $this->accountChannels($account)
             ->with('channelGroup')
-            ->orderBy('sort_order')
             ->get();
 
-        $baseUrl = rtrim(config('app.url'), '/');
+        $baseUrl  = rtrim(config('app.url'), '/');
         $username = $account->username;
         $password = $account->password;
 
@@ -87,14 +86,14 @@ class IptvController extends Controller
         $this->logAccess($request, $account, $action ?: 'login', 'ok');
 
         return match ($action) {
-            'get_live_categories'  => $this->getLiveCategories($account),
-            'get_live_streams'     => $this->getLiveStreams($account, $request),
-            'get_vod_categories'   => response()->json([]),
-            'get_vod_streams'      => response()->json([]),
-            'get_series_categories'=> response()->json([]),
-            'get_series'           => response()->json([]),
-            'get_short_epg'        => response()->json([]),
-            default                => $this->getAccountInfo($account, $request),
+            'get_live_categories'   => $this->getLiveCategories($account),
+            'get_live_streams'      => $this->getLiveStreams($account, $request),
+            'get_vod_categories'    => response()->json([]),
+            'get_vod_streams'       => response()->json([]),
+            'get_series_categories' => response()->json([]),
+            'get_series'            => response()->json([]),
+            'get_short_epg'         => response()->json([]),
+            default                 => $this->getAccountInfo($account, $request),
         };
     }
 
@@ -133,12 +132,17 @@ class IptvController extends Controller
     }
 
     /**
-     * Return live stream categories (channel groups) for the account.
+     * Return live stream categories (channel groups) for this account's source.
      */
     private function getLiveCategories(IptvAccount $account): JsonResponse
     {
-        $groups = $account->resolvedChannelGroups()
-            ->map(fn (object $g, int $i) => [
+        $groups = $this->accountChannels($account)
+            ->with('channelGroup')
+            ->get()
+            ->pluck('channelGroup')
+            ->filter()
+            ->unique('id')
+            ->map(fn (object $g) => [
                 'category_id'   => (string) $g->id,
                 'category_name' => $g->name,
                 'parent_id'     => 0,
@@ -149,36 +153,33 @@ class IptvController extends Controller
     }
 
     /**
-     * Return live streams, optionally filtered by category_id.
+     * Return live streams scoped to the account's M3U source.
+     * Optionally filtered by category_id.
      */
     private function getLiveStreams(IptvAccount $account, Request $request): JsonResponse
     {
         $categoryId = $request->input('category_id');
-        $groupIds   = $account->resolvedChannelGroups()->pluck('id');
 
-        $query = Channel::active()
-            ->whereIn('channel_group_id', $groupIds)
-            ->with('channelGroup')
-            ->orderBy('sort_order');
+        $query = $this->accountChannels($account)->with('channelGroup');
 
         if ($categoryId) {
             $query->where('channel_group_id', $categoryId);
         }
 
-        $streams = $query->get()->map(fn (Channel $ch, int $i) => [
-            'num'                  => $i + 1,
-            'name'                 => $ch->name,
-            'stream_type'          => 'live',
-            'stream_id'            => $ch->id,
-            'stream_icon'          => $ch->logo_url ?? '',
-            'epg_channel_id'       => $ch->tvg_id ?? '',
-            'added'                => (string) ($ch->created_at?->timestamp ?? 0),
-            'category_id'          => (string) ($ch->channel_group_id ?? ''),
-            'custom_sid'           => '',
-            'tv_archive'           => 0,
-            'tv_archive_duration'  => 0,
-            'direct_source'        => '',
-            'thumbnail'            => $ch->logo_url ?? '',
+        $streams = $query->get()->values()->map(fn (Channel $ch, int $i) => [
+            'num'                 => $i + 1,
+            'name'                => $ch->name,
+            'stream_type'         => 'live',
+            'stream_id'           => $ch->id,
+            'stream_icon'         => $ch->logo_url ?? '',
+            'epg_channel_id'      => $ch->tvg_id ?? '',
+            'added'               => (string) ($ch->created_at?->timestamp ?? 0),
+            'category_id'         => (string) ($ch->channel_group_id ?? ''),
+            'custom_sid'          => '',
+            'tv_archive'          => 0,
+            'tv_archive_duration' => 0,
+            'direct_source'       => '',
+            'thumbnail'           => $ch->logo_url ?? '',
         ]);
 
         return response()->json($streams);
@@ -208,19 +209,17 @@ class IptvController extends Controller
         // Parse channel id from "123.ts" or "123.m3u8"
         $channelId = (int) preg_replace('/\.\w+$/', '', $streamId);
 
-        $channel = Channel::find($channelId);
+        // Channel must belong to this account's source
+        $channel = $this->accountChannels($account)
+            ->where('channels.id', $channelId)
+            ->first();
+
         if (! $channel || ! $channel->is_active) {
             return response('Channel not found', 404, ['Content-Type' => 'text/plain']);
         }
 
-        // Check channel is in an accessible group for this account
-        $groupIds = $account->resolvedChannelGroups()->pluck('id');
-        if (! $groupIds->contains($channel->channel_group_id)) {
-            return response('Access denied', 403, ['Content-Type' => 'text/plain']);
-        }
-
         // Enforce max_connections
-        $ip            = $request->ip();
+        $ip             = $request->ip();
         $activeSessions = StreamSession::where('account_id', $account->id)
             ->where('last_seen_at', '>', now()->subSeconds(30))
             ->where(fn ($q) => $q->where('channel_id', '!=', $channelId)->orWhere('ip_address', '!=', $ip))
@@ -245,14 +244,12 @@ class IptvController extends Controller
             default => 'video/mp2t',
         };
 
-        $sessionKey = "{$account->id}_{$channelId}_{$ip}";
-
-        return response()->stream(function () use ($upstreamUrl, $account, $channelId, $ip, $sessionKey) {
+        return response()->stream(function () use ($upstreamUrl, $account, $channelId, $ip) {
             $context = stream_context_create([
                 'http' => [
-                    'timeout'        => 10,
-                    'follow_location'=> 1,
-                    'user_agent'     => 'Mozilla/5.0 IPTV Proxy',
+                    'timeout'         => 10,
+                    'follow_location'  => 1,
+                    'user_agent'      => 'Mozilla/5.0 IPTV Proxy',
                 ],
             ]);
 
@@ -263,11 +260,11 @@ class IptvController extends Controller
                 return;
             }
 
-            // Cleanup session on disconnect
-            $accountId  = $account->id;
-            $chId       = $channelId;
-            $ipAddr     = $ip;
+            $accountId = $account->id;
+            $chId      = $channelId;
+            $ipAddr    = $ip;
 
+            // Cleanup session on disconnect
             register_shutdown_function(function () use ($accountId, $chId, $ipAddr) {
                 try {
                     StreamSession::where('account_id', $accountId)
@@ -275,7 +272,7 @@ class IptvController extends Controller
                         ->where('ip_address', $ipAddr)
                         ->delete();
                 } catch (\Throwable) {
-                    // Ignore - process is shutting down
+                    // Ignore — process shutting down
                 }
             });
 
@@ -287,7 +284,7 @@ class IptvController extends Controller
                 echo $chunk;
                 flush();
 
-                // Update last_seen_at periodically (every ~5s worth of data)
+                // Update last_seen_at periodically (~every 5s)
                 static $lastUpdate = 0;
                 $now = time();
                 if ($now - $lastUpdate >= 5) {
@@ -303,8 +300,8 @@ class IptvController extends Controller
 
             fclose($stream);
         }, 200, [
-            'Content-Type'  => $contentType,
-            'Cache-Control' => 'no-cache, no-store',
+            'Content-Type'      => $contentType,
+            'Cache-Control'     => 'no-cache, no-store',
             'X-Accel-Buffering' => 'no', // Disable Nginx buffering
         ]);
     }
@@ -312,6 +309,26 @@ class IptvController extends Controller
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Get a base Channel query scoped to this account's M3U source.
+     *
+     * If the account has no source assigned, returns an empty query
+     * so the client sees no channels (rather than the global pool).
+     */
+    private function accountChannels(IptvAccount $account): \Illuminate\Database\Eloquent\Builder
+    {
+        $query = Channel::active()->orderBy('sort_order');
+
+        if ($account->m3u_source_id) {
+            $query->where('m3u_source_id', $account->m3u_source_id);
+        } else {
+            // No source assigned — return nothing rather than leaking global channels
+            $query->whereRaw('1 = 0');
+        }
+
+        return $query;
+    }
 
     private function logAccess(Request $request, IptvAccount $account, string $action, string $status): void
     {

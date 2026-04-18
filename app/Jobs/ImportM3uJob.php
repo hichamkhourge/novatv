@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Channel;
 use App\Models\ChannelGroup;
+use App\Models\M3uSource;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -14,7 +15,7 @@ use Illuminate\Support\Str;
 
 /**
  * Parse an M3U playlist (from URL or local file path) and upsert
- * channels + channel groups into the database.
+ * channels + channel groups into the database, scoped to a specific M3uSource.
  *
  * Returns a summary array: ['created' => N, 'updated' => N, 'skipped' => N]
  */
@@ -29,24 +30,35 @@ class ImportM3uJob implements ShouldQueue
     public array $summary = ['created' => 0, 'updated' => 0, 'skipped' => 0];
 
     /**
-     * @param string $source URL or absolute local file path to an M3U playlist.
+     * @param string        $source    URL or absolute local file path to an M3U playlist.
+     * @param int|null      $sourceId  ID of the M3uSource record to stamp on channels.
      */
-    public function __construct(public readonly string $source) {}
+    public function __construct(
+        public readonly string $source,
+        public readonly ?int   $sourceId = null,
+    ) {}
 
     /**
      * Execute the import job.
      */
     public function handle(): array
     {
+        $m3uSource = $this->sourceId ? M3uSource::find($this->sourceId) : null;
+
+        // Mark source as syncing
+        $m3uSource?->update(['status' => 'syncing']);
+
         $lines = $this->readLines($this->source);
 
         if ($lines === null) {
             Log::error('ImportM3uJob: Could not read source', ['source' => $this->source]);
+            $m3uSource?->update(['status' => 'error', 'error_message' => 'Could not read M3U source URL/file.']);
             return $this->summary;
         }
 
-        $groupCache  = [];  // name -> ChannelGroup model (in-memory cache)
+        $groupCache    = [];   // name -> ChannelGroup model (in-memory cache)
         $pendingExtInf = null;
+        $sortOrder     = 0;
 
         foreach ($lines as $raw) {
             $line = trim($raw);
@@ -79,15 +91,21 @@ class ImportM3uJob implements ShouldQueue
 
                     $group = $groupCache[$groupName];
 
-                    // Upsert channel by stream_url
-                    $existing = Channel::where('stream_url', $streamUrl)->first();
+                    // Upsert channel — scoped to this source if sourceId provided
+                    $query = Channel::where('stream_url', $streamUrl);
+                    if ($this->sourceId) {
+                        $query->where('m3u_source_id', $this->sourceId);
+                    }
+                    $existing = $query->first();
 
                     $data = [
                         'channel_group_id' => $group->id,
+                        'm3u_source_id'    => $this->sourceId,
                         'name'             => $attrs['name'] ?: $streamUrl,
                         'logo_url'         => $attrs['tvg-logo'] ?: null,
                         'tvg_id'           => $attrs['tvg-id'] ?: null,
                         'tvg_name'         => $attrs['tvg-name'] ?: null,
+                        'sort_order'       => $sortOrder++,
                         'is_active'        => true,
                     ];
 
@@ -117,9 +135,34 @@ class ImportM3uJob implements ShouldQueue
             }
         }
 
+        // Update M3uSource stats
+        if ($m3uSource) {
+            $channelsCount = Channel::where('m3u_source_id', $this->sourceId)->count();
+            $m3uSource->update([
+                'status'         => 'idle',
+                'channels_count' => $channelsCount,
+                'last_synced_at' => now(),
+                'error_message'  => null,
+            ]);
+        }
+
         Log::info('ImportM3uJob: Completed', array_merge(['source' => $this->source], $this->summary));
 
         return $this->summary;
+    }
+
+    /**
+     * Handle job failure.
+     */
+    public function failed(\Throwable $exception): void
+    {
+        if ($this->sourceId) {
+            M3uSource::where('id', $this->sourceId)->update([
+                'status'        => 'error',
+                'error_message' => $exception->getMessage(),
+            ]);
+        }
+        Log::error('ImportM3uJob: Failed', ['source' => $this->source, 'error' => $exception->getMessage()]);
     }
 
     /**

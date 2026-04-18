@@ -4,7 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class M3uSource extends Model
@@ -42,12 +42,11 @@ class M3uSource extends Model
     }
 
     /**
-     * IPTV users linked to this M3U source (many-to-many)
+     * IPTV accounts that use this M3U source
      */
-    public function iptvUsers(): BelongsToMany
+    public function iptvAccounts(): HasMany
     {
-        return $this->belongsToMany(IptvUser::class, 'user_sources')
-            ->withTimestamps();
+        return $this->hasMany(IptvAccount::class);
     }
 
     /**
