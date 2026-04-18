@@ -15,12 +15,102 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  * Handles all IPTV client-facing endpoints:
  *  - M3U playlist (/get.php)
  *  - Xtream Codes API (/player_api.php)
- *  - Stream proxy (/live/{username}/{password}/{id}.ts|m3u8)
+ *  - Nginx auth_request (/api/auth/stream)
+ *  - Stream proxy fallback (/live/{username}/{password}/{id}.ts|m3u8)
  *
  * Channels are always scoped to the account's linked M3U source.
  */
 class IptvController extends Controller
 {
+    // -------------------------------------------------------------------------
+    // Nginx auth_request endpoint
+    // -------------------------------------------------------------------------
+
+    /**
+     * Called INTERNALLY by Nginx auth_request before proxy_pass-ing a stream.
+     *
+     * Nginx passes stream info via FastCGI headers:
+     *   HTTP_X_STREAM_USERNAME, HTTP_X_STREAM_PASSWORD, HTTP_X_STREAM_ID
+     *
+     * Returns:
+     *   200 + X-Upstream-* headers  → Nginx proxies the stream to the upstream
+     *   401                         → Nginx returns 401 to the client
+     *   403                         → Nginx returns 403 (suspended/expired/max conn)
+     *   404                         → Nginx returns 404 (channel not found)
+     */
+    public function authStream(Request $request): Response
+    {
+        $username = $request->server('HTTP_X_STREAM_USERNAME') ?? $request->header('X-Stream-Username');
+        $password = $request->server('HTTP_X_STREAM_PASSWORD') ?? $request->header('X-Stream-Password');
+        $streamId = $request->server('HTTP_X_STREAM_ID')       ?? $request->header('X-Stream-Id');
+
+        // Authenticate
+        $account = IptvAccount::where('username', $username)
+            ->where('password', $password)
+            ->first();
+
+        if (! $account) {
+            return response('Unauthorized', 401);
+        }
+
+        if ($account->status === 'suspended') {
+            return response('Suspended', 403);
+        }
+
+        if ($account->isExpired()) {
+            return response('Expired', 403);
+        }
+
+        // Find channel
+        $channelId = (int) preg_replace('/\.\w+$/', '', (string) $streamId);
+
+        $channel = $this->accountChannels($account)
+            ->where('channels.id', $channelId)
+            ->first();
+
+        if (! $channel || ! $channel->is_active) {
+            return response('Channel not found', 404);
+        }
+
+        // Enforce max_connections
+        $ip             = $request->ip();
+        $activeSessions = StreamSession::where('account_id', $account->id)
+            ->where('last_seen_at', '>', now()->subSeconds(30))
+            ->where(fn ($q) => $q->where('channel_id', '!=', $channelId)->orWhere('ip_address', '!=', $ip))
+            ->count();
+
+        if ($activeSessions >= $account->max_connections) {
+            return response('Max connections', 429);
+        }
+
+        // Register/update session
+        StreamSession::updateOrCreate(
+            ['account_id' => $account->id, 'channel_id' => $channelId, 'ip_address' => $ip],
+            ['started_at' => now(), 'last_seen_at' => now()],
+        );
+
+        // Parse the upstream URL into components for Nginx proxy_pass
+        $upstreamUrl = $channel->stream_url;
+        $parsed      = parse_url($upstreamUrl);
+
+        $scheme = $parsed['scheme'] ?? 'http';
+        $host   = $parsed['host']   ?? '';
+        $port   = $parsed['port']   ?? ($scheme === 'https' ? 443 : 80);
+        $path   = ($parsed['path'] ?? '/');
+        if (! empty($parsed['query'])) {
+            $path .= '?' . $parsed['query'];
+        }
+
+        // Return 200 with upstream URL components as headers
+        // Nginx reads these via auth_request_set $upstream_xxx $upstream_http_x_upstream_xxx
+        return response('OK', 200, [
+            'X-Upstream-Scheme' => $scheme,
+            'X-Upstream-Host'   => $host,
+            'X-Upstream-Port'   => (string) $port,
+            'X-Upstream-Path'   => $path,
+        ]);
+    }
+
     // -------------------------------------------------------------------------
     // M3U Playlist
     // -------------------------------------------------------------------------
