@@ -30,16 +30,25 @@ class IptvController extends Controller
      *
      * GET /get.php?username=X&password=Y&type=m3u_plus&output=ts
      */
-    public function getPlaylist(Request $request): StreamedResponse
+    public function getPlaylist(Request $request): StreamedResponse|Response
     {
         /** @var IptvAccount $account */
         $account = $request->attributes->get('iptv_account');
 
         $this->logAccess($request, $account, 'playlist', 'ok');
 
-        $channels = $this->accountChannels($account)
-            ->with('channelGroup')
-            ->get();
+        // Fetch channels BEFORE starting the stream so any DB error returns a real HTTP response
+        try {
+            $channels = $this->accountChannels($account)
+                ->with('channelGroup')
+                ->get();
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('getPlaylist: DB error', [
+                'account' => $account->username,
+                'error'   => $e->getMessage(),
+            ]);
+            return response('Server error: ' . $e->getMessage(), 500, ['Content-Type' => 'text/plain']);
+        }
 
         $baseUrl  = rtrim(config('app.url'), '/');
         $username = $account->username;
@@ -62,7 +71,7 @@ class IptvController extends Controller
                 );
             }
         }, 200, [
-            'Content-Type'        => 'application/octet-stream',
+            'Content-Type'        => 'text/plain; charset=utf-8',
             'Content-Disposition' => 'attachment; filename="playlist.m3u"',
             'Cache-Control'       => 'no-cache, no-store',
         ]);
@@ -320,8 +329,19 @@ class IptvController extends Controller
     {
         $query = Channel::active()->orderBy('sort_order');
 
-        if ($account->m3u_source_id) {
-            $query->where('m3u_source_id', $account->m3u_source_id);
+        // Safely read m3u_source_id — column may not exist if migration is pending
+        $sourceId = null;
+        try {
+            $sourceId = $account->m3u_source_id;
+        } catch (\Throwable) {}
+
+        if ($sourceId) {
+            // Only filter by m3u_source_id if the column exists on the channels table
+            $hasCol = \Illuminate\Support\Facades\Schema::hasColumn('channels', 'm3u_source_id');
+            if ($hasCol) {
+                $query->where('m3u_source_id', $sourceId);
+            }
+            // If column missing, fall through and return ALL active channels as a safe fallback
         } else {
             // No source assigned — return nothing rather than leaking global channels
             $query->whereRaw('1 = 0');
