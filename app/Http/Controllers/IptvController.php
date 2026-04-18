@@ -206,7 +206,7 @@ class IptvController extends Controller
      */
     public function streamProxy(Request $request, string $username, string $password, string $streamId): Response|StreamedResponse
     {
-        // Authenticate inline (stream endpoints don't use the middleware)
+        // Authenticate inline
         $account = IptvAccount::where('username', $username)
             ->where('password', $password)
             ->first();
@@ -224,6 +224,10 @@ class IptvController extends Controller
             ->first();
 
         if (! $channel || ! $channel->is_active) {
+            \Illuminate\Support\Facades\Log::warning('streamProxy: channel not found', [
+                'account'   => $username,
+                'channelId' => $channelId,
+            ]);
             return response('Channel not found', 404, ['Content-Type' => 'text/plain']);
         }
 
@@ -246,74 +250,87 @@ class IptvController extends Controller
 
         $upstreamUrl = $channel->stream_url;
 
-        // Determine content type from extension
+        // Detect content type from the extension requested by the client
         $ext         = strtolower(pathinfo($streamId, PATHINFO_EXTENSION));
         $contentType = match ($ext) {
             'm3u8'  => 'application/vnd.apple.mpegurl',
             default => 'video/mp2t',
         };
 
-        return response()->stream(function () use ($upstreamUrl, $account, $channelId, $ip) {
-            $context = stream_context_create([
-                'http' => [
-                    'timeout'         => 10,
-                    'follow_location'  => 1,
-                    'user_agent'      => 'Mozilla/5.0 IPTV Proxy',
-                ],
-            ]);
+        $accountId = $account->id;
 
-            $stream = @fopen($upstreamUrl, 'rb', false, $context);
+        return response()->stream(function () use ($upstreamUrl, $accountId, $channelId, $ip) {
 
-            if (! $stream) {
-                echo '';
-                return;
-            }
-
-            $accountId = $account->id;
-            $chId      = $channelId;
-            $ipAddr    = $ip;
-
-            // Cleanup session on disconnect
-            register_shutdown_function(function () use ($accountId, $chId, $ipAddr) {
+            // Cleanup session when client disconnects
+            register_shutdown_function(function () use ($accountId, $channelId, $ip) {
                 try {
                     StreamSession::where('account_id', $accountId)
-                        ->where('channel_id', $chId)
-                        ->where('ip_address', $ipAddr)
+                        ->where('channel_id', $channelId)
+                        ->where('ip_address', $ip)
                         ->delete();
-                } catch (\Throwable) {
-                    // Ignore — process shutting down
-                }
+                } catch (\Throwable) {}
             });
 
-            while (! feof($stream) && ! connection_aborted()) {
-                $chunk = fread($stream, 8192);
-                if ($chunk === false) {
-                    break;
-                }
-                echo $chunk;
-                flush();
+            $ch = curl_init($upstreamUrl);
 
-                // Update last_seen_at periodically (~every 5s)
-                static $lastUpdate = 0;
-                $now = time();
-                if ($now - $lastUpdate >= 5) {
-                    try {
-                        StreamSession::where('account_id', $accountId)
-                            ->where('channel_id', $chId)
-                            ->where('ip_address', $ipAddr)
-                            ->update(['last_seen_at' => now()]);
-                    } catch (\Throwable) {}
-                    $lastUpdate = $now;
-                }
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => false,        // stream directly
+                CURLOPT_FOLLOWLOCATION => true,         // follow HTTP redirects
+                CURLOPT_MAXREDIRS      => 5,
+                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_TIMEOUT        => 0,            // no read timeout (live stream)
+                CURLOPT_SSL_VERIFYPEER => false,        // allow self-signed upstream certs
+                CURLOPT_SSL_VERIFYHOST => false,
+                CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; IPTV Proxy)',
+                CURLOPT_HTTPHEADER     => [
+                    'Accept: */*',
+                    'Connection: keep-alive',
+                ],
+                CURLOPT_WRITEFUNCTION  => function ($curl, $data) use ($accountId, $channelId, $ip) {
+                    if (connection_aborted()) {
+                        return -1; // Signal cURL to stop
+                    }
+
+                    echo $data;
+                    flush();
+
+                    // Update last_seen_at every ~5s
+                    static $lastUpdate = 0;
+                    $now = time();
+                    if ($now - $lastUpdate >= 5) {
+                        try {
+                            StreamSession::where('account_id', $accountId)
+                                ->where('channel_id', $channelId)
+                                ->where('ip_address', $ip)
+                                ->update(['last_seen_at' => now()]);
+                        } catch (\Throwable) {}
+                        $lastUpdate = $now;
+                    }
+
+                    return strlen($data);
+                },
+            ]);
+
+            $result = curl_exec($ch);
+
+            if ($result === false) {
+                \Illuminate\Support\Facades\Log::warning('streamProxy: cURL failed', [
+                    'url'   => $upstreamUrl,
+                    'error' => curl_error($ch),
+                    'code'  => curl_errno($ch),
+                ]);
             }
 
-            fclose($stream);
+            curl_close($ch);
+
         }, 200, [
             'Content-Type'      => $contentType,
             'Cache-Control'     => 'no-cache, no-store',
-            'X-Accel-Buffering' => 'no', // Disable Nginx buffering
+            'X-Accel-Buffering' => 'no', // Disable Nginx/proxy buffering
+            'Pragma'            => 'no-cache',
         ]);
     }
+
 
     // -------------------------------------------------------------------------
     // Helpers
