@@ -285,15 +285,13 @@ class IptvController extends Controller
     }
 
     /**
-     * Proxy the upstream stream directly to the client.
-     *
-     * GET /live/{username}/{password}/{channel_id}.ts
+     * Proxy the upstream stream directly to the client.     * GET /live/{username}/{password}/{channel_id}.ts
      * GET /live/{username}/{password}/{channel_id}.m3u8
      *
-     * We bypass Laravel's StreamedResponse here and write directly to output
-     * to avoid Symfony's response wrapper corrupting the raw binary stream.
+     * Nginx routes this to PHP-FPM (with fastcgi_buffering off).
+     * cURL follows upstream redirects server-side so IP-locked tokens work.
      */
-    public function streamProxy(Request $request, string $username, string $password, string $streamId): Response|StreamedResponse
+    public function streamProxy(Request $request, string $username, string $password, string $streamId): Response
     {
         // ── 1. Authenticate ──────────────────────────────────────────────────
         $account = IptvAccount::where('username', $username)
@@ -338,8 +336,12 @@ class IptvController extends Controller
         $ext         = strtolower(pathinfo($streamId, PATHINFO_EXTENSION));
         $contentType = ($ext === 'm3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t';
 
-        // ── 5. Stream — bypass Laravel response system ───────────────────────
-        // Send headers manually before any output
+        // ── 5. Stream ────────────────────────────────────────────────────────
+        // Remove PHP time limit — streams can run for hours
+        set_time_limit(0);
+        ignore_user_abort(false);
+
+        // Send headers before any output
         if (! headers_sent()) {
             header('Content-Type: ' . $contentType);
             header('Cache-Control: no-cache, no-store, must-revalidate');
@@ -347,11 +349,11 @@ class IptvController extends Controller
             header('X-Accel-Buffering: no');
         }
 
-        // Flush any output buffers so Nginx stops buffering immediately
+        // Kill all output buffers so Nginx (fastcgi_buffering off) sends immediately
         while (ob_get_level() > 0) {
-            ob_end_flush();
+            ob_end_clean();
         }
-        flush();
+        ob_implicit_flush(true);
 
         // Session cleanup on disconnect
         register_shutdown_function(function () use ($accountId, $channelId, $ip) {
@@ -363,50 +365,50 @@ class IptvController extends Controller
             } catch (\Throwable) {}
         });
 
-        // Open cURL and pipe directly to PHP stdout
+        $lastUpdate = time();
+
         $ch = curl_init($upstreamUrl);
-
-        $output = fopen('php://output', 'wb');
-
         curl_setopt_array($ch, [
-            CURLOPT_FILE           => $output,          // write to php://output directly
+            // Follow upstream redirects on the SERVER — IP-locked tokens stay valid
             CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS      => 5,
+            CURLOPT_MAXREDIRS      => 10,
             CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT        => 0,                // no read timeout for live streams
+            CURLOPT_TIMEOUT        => 0,       // no timeout — live stream runs indefinitely
             CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => false,
-            CURLOPT_BUFFERSIZE     => 128 * 1024,       // 128 KB buffer for smooth playback
+            CURLOPT_BUFFERSIZE     => 64 * 1024,
             CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; IPTVProxy/1.0)',
-            CURLOPT_HTTPHEADER     => ['Accept: */*', 'Connection: keep-alive'],
-        ]);
+            CURLOPT_HTTPHEADER     => ['Accept: */*'],
 
-        // Periodically update last_seen_at using CURLOPT_PROGRESSFUNCTION
-        curl_setopt($ch, CURLOPT_NOPROGRESS, false);
-        $lastUpdate = time();
-        curl_setopt($ch, CURLOPT_PROGRESSFUNCTION, function (
-            $resource, $downloadSize, $downloaded, $uploadSize, $uploaded
-        ) use ($accountId, $channelId, $ip, &$lastUpdate) {
-            if (connection_aborted()) {
-                return 1; // Abort cURL
-            }
-            $now = time();
-            if ($now - $lastUpdate >= 10) {
-                try {
-                    StreamSession::where('account_id', $accountId)
-                        ->where('channel_id', $channelId)
-                        ->where('ip_address', $ip)
-                        ->update(['last_seen_at' => now()]);
-                } catch (\Throwable) {}
-                $lastUpdate = $now;
-            }
-            return 0;
-        });
+            // Write each chunk directly to the client with an explicit flush
+            CURLOPT_WRITEFUNCTION  => function ($curl, $data) use ($accountId, $channelId, $ip, &$lastUpdate): int {
+                if (connection_aborted()) {
+                    return -1; // Tell cURL to abort
+                }
+
+                echo $data;
+                flush();
+
+                // Heartbeat — update session every 10s so it stays alive
+                $now = time();
+                if ($now - $lastUpdate >= 10) {
+                    try {
+                        StreamSession::where('account_id', $accountId)
+                            ->where('channel_id', $channelId)
+                            ->where('ip_address', $ip)
+                            ->update(['last_seen_at' => now()]);
+                    } catch (\Throwable) {}
+                    $lastUpdate = $now;
+                }
+
+                return strlen($data);
+            },
+        ]);
 
         $ok = curl_exec($ch);
 
         if ($ok === false) {
-            \Illuminate\Support\Facades\Log::warning('streamProxy: upstream failed', [
+            \Illuminate\Support\Facades\Log::warning('streamProxy: upstream cURL failed', [
                 'url'   => $upstreamUrl,
                 'error' => curl_error($ch),
                 'errno' => curl_errno($ch),
@@ -414,9 +416,8 @@ class IptvController extends Controller
         }
 
         curl_close($ch);
-        fclose($output);
 
-        // Return a null response — we already sent everything directly
+        // Return empty response — headers + body already sent directly
         return response('', 200);
     }
 
