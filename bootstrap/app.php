@@ -14,8 +14,8 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
         then: function () {
-            // IPTV client-facing routes (no auth middleware group — handled per-route)
-            Route::middleware('web')
+            // IPTV client-facing routes — no session, no CSRF, no cookies
+            Route::middleware([])
                 ->group(base_path('routes/iptv.php'));
         },
     )
@@ -28,6 +28,13 @@ return Application::configure(basePath: dirname(__DIR__))
                 | Illuminate\Http\Request::HEADER_X_FORWARDED_PORT
                 | Illuminate\Http\Request::HEADER_X_FORWARDED_PROTO,
         );
+
+        // Exclude IPTV endpoints from CSRF verification
+        $middleware->validateCsrfTokens(except: [
+            '/get.php',
+            '/player_api.php',
+            '/live/*',
+        ]);
     })
     ->withSchedule(function (Schedule $schedule) {
         // Purge stale stream sessions every minute (last_seen_at older than 60s)
