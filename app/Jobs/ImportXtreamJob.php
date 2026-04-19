@@ -1,0 +1,264 @@
+<?php
+
+namespace App\Jobs;
+
+use App\Models\Channel;
+use App\Models\ChannelGroup;
+use App\Models\M3uSource;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+
+/**
+ * Import channels from an Xtream Codes API endpoint.
+ *
+ * Calls:
+ *   GET /player_api.php?username=X&password=Y&action=get_live_categories
+ *   GET /player_api.php?username=X&password=Y&action=get_live_streams
+ *   (optionally VOD & series too)
+ *
+ * Stream URL format: http://host:port/username/password/stream_id.ts
+ */
+class ImportXtreamJob implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    public int $timeout = 1800; // 30 minutes
+    public int $tries   = 1;
+
+    public array $summary = ['created' => 0, 'skipped' => 0, 'errors' => 0];
+
+    public function __construct(
+        public readonly int $sourceId,
+    ) {}
+
+    public function handle(): void
+    {
+        $m3uSource = M3uSource::find($this->sourceId);
+        if (! $m3uSource) {
+            Log::error('ImportXtreamJob: Source not found', ['sourceId' => $this->sourceId]);
+            return;
+        }
+
+        $host     = rtrim($m3uSource->xtream_host, '/');
+        $username = $m3uSource->xtream_username;
+        $password = $m3uSource->xtream_password;
+
+        if (! $host || ! $username || ! $password) {
+            $m3uSource->update(['status' => 'error', 'error_message' => 'Xtream host/username/password not configured.']);
+            return;
+        }
+
+        $m3uSource->update(['status' => 'syncing', 'error_message' => null]);
+
+        // Excluded groups (lowercase for case-insensitive matching)
+        $excludedGroups = [];
+        if (! empty($m3uSource->excluded_groups)) {
+            $raw            = $m3uSource->excluded_groups;
+            $excludedGroups = is_array($raw) ? $raw : (json_decode($raw, true) ?? []);
+            $excludedGroups = array_map('strtolower', $excludedGroups);
+        }
+
+        // Which stream types to import
+        $streamTypes = ['live'];
+        if (! empty($m3uSource->xtream_stream_types)) {
+            $raw         = $m3uSource->xtream_stream_types;
+            $streamTypes = is_array($raw) ? $raw : (json_decode($raw, true) ?? ['live']);
+        }
+
+        try {
+            // Delete existing channels for a clean re-import
+            Channel::where('m3u_source_id', $this->sourceId)->delete();
+
+            $sortOrder = 0;
+
+            foreach ($streamTypes as $type) {
+                $this->importType($host, $username, $password, $type, $m3uSource, $excludedGroups, $sortOrder);
+            }
+
+            // Update stats
+            $channelsCount = Channel::where('m3u_source_id', $this->sourceId)->count();
+            $m3uSource->update([
+                'status'         => 'idle',
+                'channels_count' => $channelsCount,
+                'last_synced_at' => now(),
+                'error_message'  => null,
+            ]);
+
+            Log::info('ImportXtreamJob: Completed', ['sourceId' => $this->sourceId, 'summary' => $this->summary]);
+        } catch (\Throwable $e) {
+            $m3uSource->update(['status' => 'error', 'error_message' => $e->getMessage()]);
+            Log::error('ImportXtreamJob: Failed', ['sourceId' => $this->sourceId, 'error' => $e->getMessage()]);
+            throw $e;
+        }
+    }
+
+    private function importType(
+        string   $host,
+        string   $username,
+        string   $password,
+        string   $type,           // live | vod | series
+        M3uSource $m3uSource,
+        array    $excludedGroups,
+        int      &$sortOrder,
+    ): void {
+        $apiBase = "{$host}/player_api.php?username={$username}&password={$password}";
+
+        // ── 1. Fetch categories ───────────────────────────────────────────────
+        $catAction  = match ($type) {
+            'vod'    => 'get_vod_categories',
+            'series' => 'get_series_categories',
+            default  => 'get_live_categories',
+        };
+
+        Log::info("ImportXtreamJob: Fetching {$catAction}");
+        $catResponse = Http::timeout(60)
+            ->withUserAgent('Mozilla/5.0 (compatible; IPTVImporter/1.0)')
+            ->get("{$apiBase}&action={$catAction}");
+
+        if (! $catResponse->successful()) {
+            Log::warning("ImportXtreamJob: Failed to fetch categories", ['action' => $catAction, 'status' => $catResponse->status()]);
+            return;
+        }
+
+        $categories = $catResponse->json();
+        if (! is_array($categories)) {
+            Log::warning("ImportXtreamJob: Categories response is not an array");
+            return;
+        }
+
+        // Build category_id → ChannelGroup model map
+        $categoryMap = [];  // category_id (string) → ChannelGroup::id (int)
+        $groupCache  = [];  // name → id
+
+        foreach ($categories as $cat) {
+            $catId   = (string) ($cat['category_id'] ?? '');
+            $catName = trim($cat['category_name'] ?? 'Uncategorized');
+
+            if ($catName === '') {
+                $catName = 'Uncategorized';
+            }
+
+            if (! isset($groupCache[$catName])) {
+                $group             = ChannelGroup::firstOrCreate(
+                    ['name' => $catName],
+                    ['slug' => Str::slug($catName), 'sort_order' => 0, 'is_active' => true],
+                );
+                $groupCache[$catName] = $group->id;
+            }
+
+            if ($catId !== '') {
+                $categoryMap[$catId] = $groupCache[$catName];
+            }
+        }
+
+        $uncategorizedId = $groupCache['Uncategorized']
+            ?? ChannelGroup::firstOrCreate(['name' => 'Uncategorized'], ['slug' => 'uncategorized', 'sort_order' => 0, 'is_active' => true])->id;
+
+        // ── 2. Fetch streams ──────────────────────────────────────────────────
+        $streamAction = match ($type) {
+            'vod'    => 'get_vod_streams',
+            'series' => 'get_series',
+            default  => 'get_live_streams',
+        };
+
+        Log::info("ImportXtreamJob: Fetching {$streamAction}");
+        $streamResponse = Http::timeout(120)
+            ->withUserAgent('Mozilla/5.0 (compatible; IPTVImporter/1.0)')
+            ->get("{$apiBase}&action={$streamAction}");
+
+        if (! $streamResponse->successful()) {
+            Log::warning("ImportXtreamJob: Failed to fetch streams", ['action' => $streamAction, 'status' => $streamResponse->status()]);
+            return;
+        }
+
+        $streams = $streamResponse->json();
+        if (! is_array($streams)) {
+            Log::warning("ImportXtreamJob: Streams response is not an array");
+            return;
+        }
+
+        Log::info("ImportXtreamJob: Processing " . count($streams) . " {$type} streams");
+
+        // ── 3. Batch insert streams ───────────────────────────────────────────
+        $batch     = [];
+        $batchSize = 500;
+        $now       = now()->toDateTimeString();
+
+        // Stream URL base: http://host/username/password/stream_id.ts
+        $ext = match ($type) {
+            'vod'    => 'mp4',
+            'series' => 'mkv',
+            default  => 'ts',
+        };
+
+        foreach ($streams as $stream) {
+            $streamId   = $stream['stream_id'] ?? ($stream['series_id'] ?? null);
+            $name       = trim($stream['name'] ?? '');
+            $categoryId = (string) ($stream['category_id'] ?? '');
+            $icon       = $stream['stream_icon'] ?? ($stream['cover'] ?? null);
+            $groupTitle = $stream['category_name'] ?? null; // sometimes included
+
+            if (! $streamId || ! $name) {
+                $this->summary['skipped']++;
+                continue;
+            }
+
+            // Resolve group
+            $groupId   = $categoryMap[$categoryId] ?? $uncategorizedId;
+            $groupName = null;
+
+            // Find group name for exclusion check
+            if (! empty($excludedGroups)) {
+                $groupName = array_search($groupId, $groupCache);
+                if ($groupName && in_array(strtolower($groupName), $excludedGroups, true)) {
+                    $this->summary['skipped']++;
+                    continue;
+                }
+            }
+
+            // Build the stream URL in Xtream Codes format
+            $streamUrl = "{$host}/{$username}/{$password}/{$streamId}.{$ext}";
+
+            $batch[] = [
+                'channel_group_id' => $groupId,
+                'm3u_source_id'    => $this->sourceId,
+                'stream_url'       => $streamUrl,
+                'name'             => $name,
+                'logo_url'         => $icon ?: null,
+                'tvg_id'           => (string) $streamId,
+                'tvg_name'         => $name,
+                'sort_order'       => $sortOrder++,
+                'is_active'        => true,
+                'created_at'       => $now,
+                'updated_at'       => $now,
+            ];
+
+            $this->summary['created']++;
+
+            if (count($batch) >= $batchSize) {
+                Channel::insert($batch);
+                $batch = [];
+            }
+        }
+
+        // Flush remaining
+        if (! empty($batch)) {
+            Channel::insert($batch);
+        }
+    }
+
+    public function failed(\Throwable $exception): void
+    {
+        M3uSource::where('id', $this->sourceId)->update([
+            'status'        => 'error',
+            'error_message' => $exception->getMessage(),
+        ]);
+        Log::error('ImportXtreamJob: Failed', ['sourceId' => $this->sourceId, 'error' => $exception->getMessage()]);
+    }
+}
