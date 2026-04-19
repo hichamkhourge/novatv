@@ -238,12 +238,15 @@ class ImportXtreamJob implements ShouldQueue
             // Build the stream URL in Xtream Codes format
             $streamUrl = "{$host}/{$username}/{$password}/{$streamId}.{$ext}";
 
+            // Skip base64-encoded logos (data: URIs) — they're too large for DB storage
+            $logoUrl = ($icon && ! str_starts_with($icon, 'data:')) ? $icon : null;
+
             $batch[] = [
                 'channel_group_id' => $groupId,
                 'm3u_source_id'    => $this->sourceId,
                 'stream_url'       => $streamUrl,
                 'name'             => $name,
-                'logo_url'         => $icon ?: null,
+                'logo_url'         => $logoUrl,
                 'tvg_id'           => (string) $streamId,
                 'tvg_name'         => $name,
                 'sort_order'       => $sortOrder++,
