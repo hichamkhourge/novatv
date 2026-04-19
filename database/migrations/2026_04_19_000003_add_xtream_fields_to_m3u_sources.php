@@ -10,15 +10,25 @@ return new class extends Migration
     {
         Schema::table('m3u_sources', function (Blueprint $table) {
             // Xtream Codes API credentials
-            $table->string('xtream_host')->nullable()->after('url');
-            $table->string('xtream_username')->nullable()->after('xtream_host');
-            $table->string('xtream_password')->nullable()->after('xtream_username');
+            if (!Schema::hasColumn('m3u_sources', 'xtream_host')) {
+                $table->string('xtream_host')->nullable()->after('url');
+            }
+            if (!Schema::hasColumn('m3u_sources', 'xtream_username')) {
+                $table->string('xtream_username')->nullable()->after('xtream_host');
+            }
+            if (!Schema::hasColumn('m3u_sources', 'xtream_password')) {
+                $table->string('xtream_password')->nullable()->after('xtream_username');
+            }
 
             // Which stream types to import: live, vod, series (comma-separated or JSON)
-            $table->json('xtream_stream_types')->nullable()->after('xtream_password');
+            if (!Schema::hasColumn('m3u_sources', 'xtream_stream_types')) {
+                $table->json('xtream_stream_types')->nullable()->after('xtream_password');
+            }
 
             // Groups to exclude from import (JSON array of group names)
-            $table->json('excluded_groups')->nullable()->after('xtream_stream_types');
+            if (!Schema::hasColumn('m3u_sources', 'excluded_groups')) {
+                $table->json('excluded_groups')->nullable()->after('xtream_stream_types');
+            }
         });
 
         // Update existing 'url' source_type rows to be explicit

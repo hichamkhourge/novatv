@@ -9,7 +9,9 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('m3u_sources', function (Blueprint $table) {
-            $table->string('stream_extension')->default('ts')->after('source_type');
+            if (!Schema::hasColumn('m3u_sources', 'stream_extension')) {
+                $table->string('stream_extension')->default('ts')->after('source_type');
+            }
         });
     }
 

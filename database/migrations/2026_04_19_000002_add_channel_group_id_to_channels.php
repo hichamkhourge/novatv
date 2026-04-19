@@ -9,11 +9,15 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('channels', function (Blueprint $table) {
-            $table->foreignId('channel_group_id')
-                ->nullable()
-                ->constrained('channel_groups')
-                ->onDelete('set null');
-            $table->integer('sort_order')->default(0)->after('is_active');
+            if (!Schema::hasColumn('channels', 'channel_group_id')) {
+                $table->foreignId('channel_group_id')
+                    ->nullable()
+                    ->constrained('channel_groups')
+                    ->onDelete('set null');
+            }
+            if (!Schema::hasColumn('channels', 'sort_order')) {
+                $table->integer('sort_order')->default(0)->after('is_active');
+            }
         });
     }
 
