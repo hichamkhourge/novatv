@@ -10,9 +10,18 @@ class M3uSource extends Model
 {
     protected $fillable = [
         'name',
-        'url',
         'source_type',
+        // M3U (URL or file)
+        'url',
         'file_path',
+        // Xtream Codes API
+        'xtream_host',
+        'xtream_username',
+        'xtream_password',
+        'xtream_stream_types',
+        // Shared options
+        'excluded_groups',
+        // Status
         'status',
         'is_active',
         'channels_count',
@@ -21,65 +30,80 @@ class M3uSource extends Model
     ];
 
     protected $casts = [
-        'is_active' => 'boolean',
-        'last_synced_at' => 'datetime',
+        'is_active'           => 'boolean',
+        'last_synced_at'      => 'datetime',
+        'xtream_stream_types' => 'array',
+        'excluded_groups'     => 'array',
     ];
 
     protected $attributes = [
-        'status' => 'idle',
-        'is_active' => true,
+        'status'        => 'idle',
+        'is_active'     => true,
         'channels_count' => 0,
-        'source_type' => 'url',
+        'source_type'   => 'url',
     ];
 
-    /**
-     * Channels belonging to this M3U source
-     */
+    // ── Relationships ─────────────────────────────────────────────────────────
+
     public function channels(): HasMany
     {
         return $this->hasMany(Channel::class);
     }
 
-    /**
-     * IPTV accounts that use this M3U source
-     */
     public function iptvAccounts(): HasMany
     {
         return $this->hasMany(IptvAccount::class);
     }
 
-    /**
-     * Check if this source uses a file upload
-     */
+    // ── Type helpers ──────────────────────────────────────────────────────────
+
+    public function isXtream(): bool
+    {
+        return $this->source_type === 'xtream';
+    }
+
     public function isFileSource(): bool
     {
         return $this->source_type === 'file';
     }
 
-    /**
-     * Get the full path to the uploaded file
-     */
-    public function getFullFilePath(): ?string
+    public function isUrlSource(): bool
     {
-        if (!$this->isFileSource() || !$this->file_path) {
-            return null;
-        }
-
-        return storage_path('app/' . $this->file_path);
+        return $this->source_type === 'url';
     }
 
     /**
-     * Scope to get only active sources
+     * Get the Xtream API base URL (for player_api.php calls).
      */
+    public function xtreamApiBase(): ?string
+    {
+        if (! $this->isXtream() || ! $this->xtream_host) {
+            return null;
+        }
+        return rtrim($this->xtream_host, '/')
+            . '/player_api.php'
+            . '?username=' . urlencode($this->xtream_username ?? '')
+            . '&password=' . urlencode($this->xtream_password ?? '');
+    }
+
+    /**
+     * Get the full path to an uploaded M3U file.
+     */
+    public function getFullFilePath(): ?string
+    {
+        if (! $this->isFileSource() || ! $this->file_path) {
+            return null;
+        }
+        return storage_path('app/' . $this->file_path);
+    }
+
+    // ── Scopes ────────────────────────────────────────────────────────────────
+
     public function scopeActive(Builder $query): Builder
     {
         return $query->where('is_active', true);
     }
 
-    /**
-     * Scope to get sources that need syncing
-     * (status is idle or error, and not syncing)
-     */
     public function scopeNeedsSync(Builder $query): Builder
     {
         return $query->where('status', '!=', 'syncing')
