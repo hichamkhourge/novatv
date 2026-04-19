@@ -168,6 +168,17 @@ class ImportM3uJob implements ShouldQueue
     /**
      * Parse a single #EXTINF line and return named attributes.
      *
+     * Handles two M3U formats:
+     *   Extended (m3u_plus): #EXTINF:-1 tvg-id="x" group-title="Group",Name
+     *   Simple   (m3u):      #EXTINF:-1,Name
+     *
+     * For the simple format (no attributes), the group is inferred from the
+     * channel name prefix:
+     *   "USA AMC"         → group "USA"
+     *   "LA: Univision"   → group "LA"
+     *   "24/7 Yellowstone" → group "24/7"
+     *   "Match Centre #1" → group "Match Centre"
+     *
      * @return array{tvg-id:string, tvg-name:string, tvg-logo:string, group-title:string, name:string}
      */
     private function parseExtInf(string $line): array
@@ -185,13 +196,29 @@ class ImportM3uJob implements ShouldQueue
             $attrs['name'] = trim(substr($line, $commaPos + 1));
         }
 
-        // Extract key="value" pairs
+        // Extract key="value" attribute pairs (extended m3u_plus format)
         foreach (array_keys($attrs) as $key) {
             if ($key === 'name') {
                 continue;
             }
             if (preg_match('/' . preg_quote($key, '/') . '="([^"]*)"/', $line, $m)) {
                 $attrs[$key] = $m[1];
+            }
+        }
+
+        // If no group-title found, infer from channel name prefix (simple M3U format)
+        if ($attrs['group-title'] === '' && $attrs['name'] !== '') {
+            $name = $attrs['name'];
+
+            if (preg_match('/^([A-Z0-9\/]{2,6}):\s+/', $name, $m)) {
+                // "LA: Univision", "SUR: RCN", "USA: CNN" → prefix before colon
+                $attrs['group-title'] = rtrim($m[1], ':');
+            } elseif (preg_match('/^(24\/7|USA|UK|AR|FR|DE|ES|IT|NL|PT|TR|CA|AU)\s/', $name, $m)) {
+                // "USA AMC", "24/7 Yellowstone"
+                $attrs['group-title'] = trim($m[1]);
+            } elseif (preg_match('/^([A-Z][a-zA-Z ]+?)\s+#\d/', $name, $m)) {
+                // "Match Centre #1" → "Match Centre"
+                $attrs['group-title'] = trim($m[1]);
             }
         }
 
@@ -225,7 +252,8 @@ class ImportM3uJob implements ShouldQueue
 
         return (function () use ($handle) {
             while (! feof($handle)) {
-                yield fgets($handle);
+                // Strip Windows-style CRLF — fgets keeps the \r on Windows M3U files
+                yield rtrim(fgets($handle), "\r\n") . "\n";
             }
             fclose($handle);
         })();
