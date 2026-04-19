@@ -48,6 +48,14 @@ class ImportM3uJob implements ShouldQueue
         // Mark source as syncing
         $m3uSource?->update(['status' => 'syncing']);
 
+        // Groups to skip (e.g. ["24/7"] to skip VOD entries on zazy-type providers)
+        $excludedGroups = [];
+        if ($m3uSource && ! empty($m3uSource->excluded_groups)) {
+            $raw            = $m3uSource->excluded_groups;
+            $excludedGroups = is_array($raw) ? $raw : (json_decode($raw, true) ?? []);
+            $excludedGroups = array_map('strtolower', $excludedGroups);
+        }
+
         $lines = $this->readLines($this->source);
 
         if ($lines === null) {
@@ -56,14 +64,22 @@ class ImportM3uJob implements ShouldQueue
             return $this->summary;
         }
 
-        $groupCache    = [];   // name -> ChannelGroup model (in-memory cache)
+        // Delete old channels for a clean re-import (avoids duplicates on re-sync)
+        if ($this->sourceId) {
+            Channel::where('m3u_source_id', $this->sourceId)->delete();
+        }
+
+        $groupCache    = [];        // groupName -> group id
         $pendingExtInf = null;
         $sortOrder     = 0;
+        $batch         = [];
+        $batchSize     = 500;
+        $now           = now()->toDateTimeString();
 
         foreach ($lines as $raw) {
             $line = trim($raw);
 
-            if ($line === '' || $line === '#EXTM3U') {
+            if ($line === '' || $line === '#EXTM3U' || str_starts_with($line, '#EXT-X-')) {
                 continue;
             }
 
@@ -74,53 +90,54 @@ class ImportM3uJob implements ShouldQueue
 
             // Stream URL line — must follow an #EXTINF line
             if ($pendingExtInf !== null && ! str_starts_with($line, '#')) {
-                $streamUrl = $line;
+                $streamUrl = trim($line);
 
                 try {
-                    $attrs = $this->parseExtInf($pendingExtInf);
-
+                    $attrs     = $this->parseExtInf($pendingExtInf);
                     $groupName = $attrs['group-title'] ?: 'Uncategorized';
 
-                    // Resolve or create channel group
+                    // Skip excluded groups (e.g. "24/7" VOD entries)
+                    if (! empty($excludedGroups) && in_array(strtolower($groupName), $excludedGroups, true)) {
+                        $this->summary['skipped']++;
+                        $pendingExtInf = null;
+                        continue;
+                    }
+
+                    // Resolve or create channel group (cache group id by name)
                     if (! isset($groupCache[$groupName])) {
-                        $groupCache[$groupName] = ChannelGroup::firstOrCreate(
+                        $group                  = ChannelGroup::firstOrCreate(
                             ['name' => $groupName],
                             ['slug' => Str::slug($groupName), 'sort_order' => 0, 'is_active' => true],
                         );
+                        $groupCache[$groupName] = $group->id;
                     }
 
-                    $group = $groupCache[$groupName];
-
-                    // Upsert channel — scoped to this source if sourceId provided
-                    $query = Channel::where('stream_url', $streamUrl);
-                    if ($this->sourceId) {
-                        $query->where('m3u_source_id', $this->sourceId);
-                    }
-                    $existing = $query->first();
-
-                    $data = [
-                        'channel_group_id' => $group->id,
+                    $batch[] = [
+                        'channel_group_id' => $groupCache[$groupName],
                         'm3u_source_id'    => $this->sourceId,
+                        'stream_url'       => $streamUrl,
                         'name'             => $attrs['name'] ?: $streamUrl,
                         'logo_url'         => $attrs['tvg-logo'] ?: null,
                         'tvg_id'           => $attrs['tvg-id'] ?: null,
                         'tvg_name'         => $attrs['tvg-name'] ?: null,
                         'sort_order'       => $sortOrder++,
                         'is_active'        => true,
+                        'created_at'       => $now,
+                        'updated_at'       => $now,
                     ];
 
-                    if ($existing) {
-                        $existing->update($data);
-                        $this->summary['updated']++;
-                    } else {
-                        Channel::create(array_merge($data, ['stream_url' => $streamUrl]));
-                        $this->summary['created']++;
+                    $this->summary['created']++;
+
+                    // Flush batch every $batchSize rows
+                    if (count($batch) >= $batchSize) {
+                        Channel::insert($batch);
+                        $batch = [];
                     }
                 } catch (\Throwable $e) {
                     Log::warning('ImportM3uJob: Skipped malformed entry', [
-                        'extinf'     => $pendingExtInf,
-                        'stream_url' => $streamUrl,
-                        'error'      => $e->getMessage(),
+                        'extinf' => $pendingExtInf,
+                        'url'    => $streamUrl,
+                        'error'  => $e->getMessage(),
                     ]);
                     $this->summary['skipped']++;
                 }
@@ -133,6 +150,11 @@ class ImportM3uJob implements ShouldQueue
             if (str_starts_with($line, '#')) {
                 $pendingExtInf = null;
             }
+        }
+
+        // Flush remaining rows
+        if (! empty($batch)) {
+            Channel::insert($batch);
         }
 
         // Update M3uSource stats
