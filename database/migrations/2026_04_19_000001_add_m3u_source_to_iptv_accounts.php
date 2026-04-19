@@ -9,10 +9,12 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('iptv_accounts', function (Blueprint $table) {
-            $table->foreignId('m3u_source_id')
-                ->nullable()
-                ->constrained('m3u_sources')
-                ->onDelete('set null');
+            if (!Schema::hasColumn('iptv_accounts', 'm3u_source_id')) {
+                $table->foreignId('m3u_source_id')
+                    ->nullable()
+                    ->constrained('m3u_sources')
+                    ->onDelete('set null');
+            }
         });
     }
 
