@@ -157,8 +157,8 @@ class ImportXtreamJob implements ShouldQueue
             }
         }
 
-        $uncategorizedId = $groupCache['Uncategorized']
-            ?? ChannelGroup::firstOrCreate(['name' => 'Uncategorized'], ['slug' => 'uncategorized', 'sort_order' => 0, 'is_active' => true])->id;
+        // Build a reverse map: ChannelGroup DB id → group name (for exclusion checks)
+        $idToName = array_flip($groupCache);  // id (int) → name (string)
 
         // ── 2. Fetch streams ──────────────────────────────────────────────────
         $streamAction = match ($type) {
@@ -190,7 +190,6 @@ class ImportXtreamJob implements ShouldQueue
         $batchSize = 500;
         $now       = now()->toDateTimeString();
 
-        // Stream URL base: http://host/username/password/stream_id.ts
         $ext = match ($type) {
             'vod'    => 'mp4',
             'series' => 'mkv',
@@ -202,21 +201,35 @@ class ImportXtreamJob implements ShouldQueue
             $name       = trim($stream['name'] ?? '');
             $categoryId = (string) ($stream['category_id'] ?? '');
             $icon       = $stream['stream_icon'] ?? ($stream['cover'] ?? null);
-            $groupTitle = $stream['category_name'] ?? null; // sometimes included
 
             if (! $streamId || ! $name) {
                 $this->summary['skipped']++;
                 continue;
             }
 
-            // Resolve group
-            $groupId   = $categoryMap[$categoryId] ?? $uncategorizedId;
-            $groupName = null;
+            // Resolve group — if category_id not found, this stream has no valid category
+            if (! isset($categoryMap[$categoryId])) {
+                // Unknown category → skip entirely (these are usually VOD/series bleed-ins)
+                $this->summary['skipped']++;
+                continue;
+            }
 
-            // Find group name for exclusion check
+            $groupId   = $categoryMap[$categoryId];
+            $groupName = $idToName[$groupId] ?? '';
+
+            // Exclusion check with prefix/substring matching:
+            // "24/7" in excluded_groups will match "24/7 Tv Series", "24/7 Action", etc.
             if (! empty($excludedGroups)) {
-                $groupName = array_search($groupId, $groupCache);
-                if ($groupName && in_array(strtolower($groupName), $excludedGroups, true)) {
+                $groupLower = strtolower($groupName);
+                $excluded   = false;
+                foreach ($excludedGroups as $pattern) {
+                    // Exact match OR the group name starts with the pattern
+                    if ($groupLower === $pattern || str_starts_with($groupLower, $pattern)) {
+                        $excluded = true;
+                        break;
+                    }
+                }
+                if ($excluded) {
                     $this->summary['skipped']++;
                     continue;
                 }
