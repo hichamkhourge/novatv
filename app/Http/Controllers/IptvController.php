@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\AccessLog;
 use App\Models\Channel;
+use App\Models\ChannelGroup;
 use App\Models\IptvAccount;
 use App\Models\StreamSession;
 use Illuminate\Http\JsonResponse;
@@ -232,16 +233,28 @@ class IptvController extends Controller
 
     /**
      * Return live stream categories (channel groups) for this account's source.
+     * Queries ChannelGroup directly via a subquery — no need to load all channels.
      */
     private function getLiveCategories(IptvAccount $account): JsonResponse
     {
-        $groups = $this->accountChannels($account)
-            ->with('channelGroup')
+        // Get the source_id from the account
+        $sourceId = null;
+        try { $sourceId = $account->m3u_source_id; } catch (\Throwable) {}
+
+        if (! $sourceId) {
+            return response()->json([]);
+        }
+
+        // Find all distinct channel_group_ids used by this source's channels
+        $groupIds = Channel::where('m3u_source_id', $sourceId)
+            ->where('is_active', true)
+            ->distinct()
+            ->pluck('channel_group_id');
+
+        $groups = ChannelGroup::whereIn('id', $groupIds)
+            ->orderBy('name')
             ->get()
-            ->pluck('channelGroup')
-            ->filter()
-            ->unique('id')
-            ->map(fn (object $g) => [
+            ->map(fn (ChannelGroup $g) => [
                 'category_id'   => (string) $g->id,
                 'category_name' => $g->name,
                 'parent_id'     => 0,
@@ -253,16 +266,16 @@ class IptvController extends Controller
 
     /**
      * Return live streams scoped to the account's M3U source.
-     * Optionally filtered by category_id.
+     * Optionally filtered by category_id (= channel_group_id in our DB).
      */
     private function getLiveStreams(IptvAccount $account, Request $request): JsonResponse
     {
         $categoryId = $request->input('category_id');
 
-        $query = $this->accountChannels($account)->with('channelGroup');
+        $query = $this->accountChannels($account);
 
         if ($categoryId) {
-            $query->where('channel_group_id', $categoryId);
+            $query->where('channel_group_id', (int) $categoryId);
         }
 
         $streams = $query->get()->values()->map(fn (Channel $ch, int $i) => [
