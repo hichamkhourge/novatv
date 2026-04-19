@@ -45,7 +45,7 @@ class IptvController extends Controller
         $password = $request->server('HTTP_X_STREAM_PASSWORD') ?? $request->header('X-Stream-Password');
         $streamId = $request->server('HTTP_X_STREAM_ID')       ?? $request->header('X-Stream-Id');
 
-        // Authenticate
+        // ── 1. Authenticate ───────────────────────────────────────────────────
         $account = IptvAccount::where('username', $username)
             ->where('password', $password)
             ->first();
@@ -62,7 +62,7 @@ class IptvController extends Controller
             return response('Expired', 403);
         }
 
-        // Find channel
+        // ── 2. Find channel ───────────────────────────────────────────────────
         $channelId = (int) preg_replace('/\.\w+$/', '', (string) $streamId);
 
         $channel = $this->accountChannels($account)
@@ -73,7 +73,7 @@ class IptvController extends Controller
             return response('Channel not found', 404);
         }
 
-        // Enforce max_connections
+        // ── 3. Enforce max_connections ────────────────────────────────────────
         $ip             = $request->ip();
         $activeSessions = StreamSession::where('account_id', $account->id)
             ->where('last_seen_at', '>', now()->subSeconds(30))
@@ -84,32 +84,109 @@ class IptvController extends Controller
             return response('Max connections', 429);
         }
 
-        // Register/update session
+        // ── 4. Register session ───────────────────────────────────────────────
         StreamSession::updateOrCreate(
             ['account_id' => $account->id, 'channel_id' => $channelId, 'ip_address' => $ip],
             ['started_at' => now(), 'last_seen_at' => now()],
         );
 
-        // Parse the upstream URL into components for Nginx proxy_pass
-        $upstreamUrl = $channel->stream_url;
-        $parsed      = parse_url($upstreamUrl);
+        // ── 5. Resolve provider URL (follow any 302 redirects) ────────────────
+        // Resolve to the final CDN URL so Nginx proxy_pass goes directly there.
+        $providerUrl = $channel->stream_url;
+        $finalUrl    = $this->resolveStreamUrl($providerUrl);
 
-        $scheme = $parsed['scheme'] ?? 'http';
-        $host   = $parsed['host']   ?? '';
-        $port   = $parsed['port']   ?? ($scheme === 'https' ? 443 : 80);
-        $path   = ($parsed['path'] ?? '/');
-        if (! empty($parsed['query'])) {
-            $path .= '?' . $parsed['query'];
+        // ── 6. Return upstream URL for Nginx proxy_pass ───────────────────────
+        // Nginx reads this via: auth_request_set $upstream_url $upstream_http_x_upstream_url;
+        return response('OK', 200, [
+            'X-Upstream-URL' => $finalUrl,
+            'Content-Type'   => 'text/plain',
+        ]);
+    }
+
+    /**
+     * Resolve a provider URL by following HTTP redirects.
+     * Uses a short timeout to prevent waiting too long if the stream doesn't redirect.
+     */
+    private function resolveStreamUrl(string $url): string
+    {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
+            CURLOPT_TIMEOUT        => config('iptv.stream.redirect_timeout', 5),
+            CURLOPT_CONNECTTIMEOUT => config('iptv.stream.redirect_connect_timeout', 3),
+            CURLOPT_USERAGENT      => request()->header('User-Agent') ?? 'VLC/3.0.20 LibVLC/3.0.20',
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4,
+            CURLOPT_RANGE          => '0-0', // Try to only fetch first byte to speed up CDNs
+        ]);
+
+        $startTime = microtime(true);
+        curl_exec($ch);
+        $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $redirectCount = curl_getinfo($ch, CURLINFO_REDIRECT_COUNT);
+        curl_close($ch);
+
+        // Log connection diagnostics
+        if (config('iptv.logging.connection_diagnostics', false)) {
+            \Log::channel(config('iptv.logging.channel', 'stack'))->info('Stream URL resolution', [
+                'original_url' => $url,
+                'final_url' => $finalUrl,
+                'http_code' => $httpCode,
+                'redirect_count' => $redirectCount,
+                'duration_ms' => round((microtime(true) - $startTime) * 1000, 2),
+            ]);
         }
 
-        // Return 200 with upstream URL components as headers
-        // Nginx reads these via auth_request_set $upstream_xxx $upstream_http_x_upstream_xxx
-        return response('OK', 200, [
-            'X-Upstream-Scheme' => $scheme,
-            'X-Upstream-Host'   => $host,
-            'X-Upstream-Port'   => (string) $port,
-            'X-Upstream-Path'   => $path,
-        ]);
+        return ($finalUrl && $finalUrl !== '') ? $finalUrl : $url;
+    }
+
+    /**
+     * Detect provider-specific configuration based on URL and credentials.
+     *
+     * This enables special handling for providers with unique requirements:
+     * - ZAZY: Requires cookie persistence across redirects for load balancing
+     * - Future providers can be added here
+     */
+    private function detectProviderConfig(string $upstreamUrl, string $username, string $password): array
+    {
+        $defaultConfig = [
+            'provider_name' => 'generic',
+            'connection_timeout' => config('iptv.stream.connection_timeout', 15),
+            'max_redirects' => 5,
+            'use_cookies' => true, // Default: always use cookies for safety
+        ];
+
+        // Detect ZAZY provider
+        $zazyPatterns = config('iptv.providers.zazy.detection_patterns', ['172.110.220.61', 'zazy']);
+        $isZazy = false;
+
+        foreach ($zazyPatterns as $pattern) {
+            if (stripos($upstreamUrl, $pattern) !== false ||
+                stripos($username, $pattern) !== false ||
+                stripos($password, $pattern) !== false) {
+                $isZazy = true;
+                break;
+            }
+        }
+
+        if ($isZazy) {
+            $fixMode = config('iptv.providers.zazy.fix_mode', 'conservative');
+            $modeConfig = config("iptv.providers.zazy.{$fixMode}", []);
+
+            return [
+                'provider_name' => 'zazy',
+                'fix_mode' => $fixMode,
+                'connection_timeout' => $modeConfig['connection_timeout'] ?? 20,
+                'max_redirects' => $modeConfig['max_redirects'] ?? 10,
+                'use_cookies' => $modeConfig['use_persistent_cookies'] ?? true,
+            ];
+        }
+
+        return $defaultConfig;
     }
 
     // -------------------------------------------------------------------------
@@ -119,7 +196,12 @@ class IptvController extends Controller
     /**
      * Generate M3U playlist for the authenticated account.
      *
-     * GET /get.php?username=X&password=Y&type=m3u_plus&output=ts
+     * Stream URLs use our proxy with a .ts extension. ExoPlayer (IPTV Smarters)
+     * uses the .ts extension to identify MPEGTS and skips the 20-second HLS probe
+     * that causes the "channel will be back soon" error.
+     * Our streamProxy strips the extension before redirecting to the provider.
+     *
+     * GET /get.php?username=X&password=Y&type=m3u_plus
      */
     public function getPlaylist(Request $request): StreamedResponse|Response
     {
@@ -128,7 +210,6 @@ class IptvController extends Controller
 
         $this->logAccess($request, $account, 'playlist', 'ok');
 
-        // Fetch channels BEFORE starting the stream so any DB error returns a real HTTP response
         try {
             $channels = $this->accountChannels($account)
                 ->with('channelGroup')
@@ -149,6 +230,8 @@ class IptvController extends Controller
             echo "#EXTM3U\r\n";
 
             foreach ($channels as $channel) {
+                // .ts extension tells ExoPlayer this is MPEGTS → no HLS probe → instant start
+                // streamProxy strips the extension and redirects to the correct provider URL
                 $streamUrl = "{$baseUrl}/live/{$username}/{$password}/{$channel->id}.ts";
 
                 echo sprintf(
@@ -167,6 +250,8 @@ class IptvController extends Controller
             'Cache-Control'       => 'no-cache, no-store',
         ]);
     }
+
+
 
     // -------------------------------------------------------------------------
     // Xtream Codes API
@@ -298,14 +383,25 @@ class IptvController extends Controller
     }
 
     /**
-     * Proxy the upstream stream directly to the client.     * GET /live/{username}/{password}/{channel_id}.ts
-     * GET /live/{username}/{password}/{channel_id}.m3u8
+     * Authenticate, validate the channel, then stream the content directly.
      *
-     * Nginx routes this to PHP-FPM (with fastcgi_buffering off).
-     * cURL follows upstream redirects server-side so IP-locked tokens work.
+     * Streaming through PHP (instead of a 302 redirect) is required because
+     * ExoPlayer (IPTV Smarters) uses the Content-Type header to identify MPEGTS.
+     * A redirect loses this header — ExoPlayer probes for HLS and waits 20s.
+     *
+     * NOTE: This requires Cloudflare proxy to be DISABLED for /live/* routes.
+     * In Cloudflare → Rules → Page Rules: novatv.novadevlabs.com/live/*
+     *   → Cache Level: Bypass, Disable Apps, Response Buffering: Off
+     * OR: use the server's direct IP for stream URLs to bypass Cloudflare entirely.
+     *
+     * GET /live/{username}/{password}/{channel_id}.ts
      */
-    public function streamProxy(Request $request, string $username, string $password, string $streamId): Response
-    {
+    public function streamProxy(
+        Request $request,
+        string $username,
+        string $password,
+        string $streamId
+    ): \Illuminate\Http\Response|\Symfony\Component\HttpFoundation\StreamedResponse {
         // ── 1. Authenticate ──────────────────────────────────────────────────
         $account = IptvAccount::where('username', $username)
             ->where('password', $password)
@@ -343,100 +439,159 @@ class IptvController extends Controller
             ['started_at' => now(), 'last_seen_at' => now()],
         );
 
-        $upstreamUrl = $channel->stream_url;
-        $accountId   = $account->id;
+        // ── 5. Stream proxy ──────────────────────────────────────────────────
+        // Strategy: pre-buffer real MPEGTS data from the provider BEFORE returning
+        // the HTTP response headers. This guarantees the client receives real PAT/PMT
+        // tables on the very first byte — compatible with all players (ExoPlayer,
+        // LG TV webOS/AVPlay, VLC, etc.) without any "channel will be back soon" errors.
+        //
+        // The client waits ~2-3s for the response (provider warmup), but once it
+        // starts, playback begins immediately with no format detection delay.
+        $upstreamUrl  = $channel->stream_url;
+        $userAgent    = 'VLC/3.0.20 LibVLC/3.0.20'; // Hardcode VLC to prevent providers from blocking Smart TVs
+        $prebuffering = true;   // true = accumulate in $prebuffer; false = echo directly
+        $prebuffer    = '';
 
-        $ext         = strtolower(pathinfo($streamId, PATHINFO_EXTENSION));
-        $contentType = ($ext === 'm3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t';
-
-        // ── 5. Stream ────────────────────────────────────────────────────────
-        // Remove PHP time limit — streams can run for hours
-        set_time_limit(0);
-        ignore_user_abort(false);
-
-        // Send headers before any output
-        if (! headers_sent()) {
-            header('Content-Type: ' . $contentType);
-            header('Cache-Control: no-cache, no-store, must-revalidate');
-            header('Pragma: no-cache');
-            header('X-Accel-Buffering: no');
-        }
-
-        // Kill all output buffers so Nginx (fastcgi_buffering off) sends immediately
-        while (ob_get_level() > 0) {
-            ob_end_clean();
-        }
-        ob_implicit_flush(true);
-
-        // Session cleanup on disconnect
-        register_shutdown_function(function () use ($accountId, $channelId, $ip) {
-            try {
-                StreamSession::where('account_id', $accountId)
-                    ->where('channel_id', $channelId)
-                    ->where('ip_address', $ip)
-                    ->delete();
-            } catch (\Throwable) {}
-        });
-
-        $lastUpdate = time();
+        // ── Provider-specific configuration ──────────────────────────────────
+        $providerConfig = $this->detectProviderConfig($upstreamUrl, $username, $password);
 
         $ch = curl_init($upstreamUrl);
         curl_setopt_array($ch, [
-            // Follow upstream redirects on the SERVER — IP-locked tokens stay valid
             CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS      => 10,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT        => 0,       // no timeout — live stream runs indefinitely
-            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_MAXREDIRS      => $providerConfig['max_redirects'],
+            CURLOPT_TIMEOUT        => 3600,
+            CURLOPT_CONNECTTIMEOUT => $providerConfig['connection_timeout'],
+            CURLOPT_USERAGENT      => $userAgent,
+            CURLOPT_BUFFERSIZE     => 65536,
+            CURLOPT_SSL_VERIFYPEER => false, // Ensure we can connect to HTTPS CDNs
             CURLOPT_SSL_VERIFYHOST => false,
-            CURLOPT_BUFFERSIZE     => 64 * 1024,
-            CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; IPTVProxy/1.0)',
-            CURLOPT_HTTPHEADER     => ['Accept: */*'],
-
-            // Write each chunk directly to the client with an explicit flush
-            CURLOPT_WRITEFUNCTION  => function ($curl, $data) use ($accountId, $channelId, $ip, &$lastUpdate): int {
-                if (connection_aborted()) {
-                    return -1; // Tell cURL to abort
+            CURLOPT_COOKIEFILE     => $providerConfig['use_cookies'] ? '' : null, // CRITICAL: Maintain load-balancer cookies across 302 redirects (Zazy)
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1, // Best stability for streaming video
+            CURLOPT_WRITEFUNCTION  => function ($curl, $data) use (&$prebuffering, &$prebuffer): int {
+                if ($prebuffering) {
+                    $prebuffer .= $data;
+                } else {
+                    echo $data;
+                    if (ob_get_level()) ob_flush();
+                    flush();
                 }
-
-                echo $data;
-                flush();
-
-                // Heartbeat — update session every 10s so it stays alive
-                $now = time();
-                if ($now - $lastUpdate >= 10) {
-                    try {
-                        StreamSession::where('account_id', $accountId)
-                            ->where('channel_id', $channelId)
-                            ->where('ip_address', $ip)
-                            ->update(['last_seen_at' => now()]);
-                    } catch (\Throwable) {}
-                    $lastUpdate = $now;
-                }
-
                 return strlen($data);
+            },
+            CURLOPT_HEADERFUNCTION => static function ($curl, $header): int {
+                return strlen($header);
             },
         ]);
 
-        $ok = curl_exec($ch);
-
-        if ($ok === false) {
-            \Illuminate\Support\Facades\Log::warning('streamProxy: upstream cURL failed', [
-                'url'   => $upstreamUrl,
-                'error' => curl_error($ch),
-                'errno' => curl_errno($ch),
+        // Log provider-specific handling
+        if (config('iptv.logging.provider_handling', false)) {
+            \Log::channel(config('iptv.logging.channel', 'stack'))->info('Stream proxy provider config', [
+                'provider' => $providerConfig['provider_name'],
+                'upstream_url' => $upstreamUrl,
+                'connection_timeout' => $providerConfig['connection_timeout'],
+                'max_redirects' => $providerConfig['max_redirects'],
+                'use_cookies' => $providerConfig['use_cookies'],
+                'username' => $username,
             ]);
         }
 
-        curl_close($ch);
+        $mh = curl_multi_init();
+        curl_multi_add_handle($mh, $ch);
 
-        // Return empty response — headers + body already sent directly
-        return response('', 200);
+        // ── Phase 1: pre-buffer until we have real MPEGTS data ───────────────
+        // Wait for at least 7 MPEGTS packets (1316 bytes) or configured timeout.
+        // This ensures PAT/PMT tables are included in the first response bytes.
+        $active      = 1;
+        $warmupStart = microtime(true);
+        $prebufferTimeout = config('iptv.stream.prebuffer_timeout', 15);
+        $minBytes = config('iptv.stream.min_mpegts_packets', 7) * 188;
+
+        do {
+            curl_multi_exec($mh, $active);
+            curl_multi_select($mh, 0.05);
+
+            if (strlen($prebuffer) >= $minBytes) {
+                break;
+            }
+        } while ($active && (microtime(true) - $warmupStart) < $prebufferTimeout);
+
+        $warmupDuration = microtime(true) - $warmupStart;
+        $prebufferBytes = strlen($prebuffer);
+
+        // Log pre-buffer metrics
+        if (config('iptv.logging.prebuffer_metrics', false)) {
+            \Log::channel(config('iptv.logging.channel', 'stack'))->info('Stream pre-buffer complete', [
+                'channel_id' => $channelId,
+                'provider' => $providerConfig['provider_name'],
+                'warmup_duration_ms' => round($warmupDuration * 1000, 2),
+                'prebuffer_bytes' => $prebufferBytes,
+                'target_bytes' => $minBytes,
+                'timeout_reached' => !$active || ($warmupDuration >= $prebufferTimeout),
+                'username' => $username,
+            ]);
+        }
+
+        // If we got nothing, return an error before headers are sent
+        if (empty($prebuffer)) {
+            curl_multi_remove_handle($mh, $ch);
+            curl_multi_close($mh);
+            curl_close($ch);
+
+            // Log connection failure
+            if (config('iptv.logging.connection_diagnostics', false)) {
+                \Log::channel(config('iptv.logging.channel', 'stack'))->error('Stream connection failed', [
+                    'channel_id' => $channelId,
+                    'upstream_url' => $upstreamUrl,
+                    'provider' => $providerConfig['provider_name'],
+                    'warmup_duration_ms' => round($warmupDuration * 1000, 2),
+                    'username' => $username,
+                ]);
+            }
+
+            return response('Upstream unavailable', 503, ['Content-Type' => 'text/plain']);
+        }
+
+        $bufferedData = $prebuffer;
+        $prebuffer    = '';
+        // $prebuffering stays true until the stream callback sets it false
+
+        // ── Phase 2: respond with buffered data + continue streaming ──────────
+        $contentType = str_ends_with($streamId, '.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t';
+        
+        return response()->stream(function () use ($mh, $ch, $bufferedData, &$prebuffering) {
+            set_time_limit(0);
+            ignore_user_abort(true);
+
+            // Flush buffered real MPEGTS data (contains PAT/PMT) to the client immediately
+            echo $bufferedData;
+            if (ob_get_level()) ob_flush();
+            flush();
+
+            // Switch WRITEFUNCTION from buffering to direct echo
+            $prebuffering = false;
+
+            // Continue forwarding the live stream from the same provider connection
+            $active = 1;
+            do {
+                curl_multi_exec($mh, $active);
+                curl_multi_select($mh, 0.05);
+            } while ($active && connection_status() === 0);
+
+            curl_multi_remove_handle($mh, $ch);
+            curl_multi_close($mh);
+            curl_close($ch);
+        }, 200, [
+            'Content-Type'      => $contentType,
+            'Cache-Control'     => 'no-cache, no-store, must-revalidate',
+            'X-Accel-Buffering' => 'no',
+            'Transfer-Encoding' => 'chunked',
+            'Connection'        => 'keep-alive',
+        ]);
     }
 
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
 
     /**
      * Get a base Channel query scoped to this account's M3U source.
@@ -446,21 +601,11 @@ class IptvController extends Controller
      */
     private function accountChannels(IptvAccount $account): \Illuminate\Database\Eloquent\Builder
     {
-        $query = Channel::active()->orderBy('sort_order');
-
-        // Safely read m3u_source_id — column may not exist if migration is pending
-        $sourceId = null;
-        try {
-            $sourceId = $account->m3u_source_id;
-        } catch (\Throwable) {}
+        $query    = Channel::active()->orderBy('sort_order');
+        $sourceId = $account->m3u_source_id ?? null;
 
         if ($sourceId) {
-            // Only filter by m3u_source_id if the column exists on the channels table
-            $hasCol = \Illuminate\Support\Facades\Schema::hasColumn('channels', 'm3u_source_id');
-            if ($hasCol) {
-                $query->where('m3u_source_id', $sourceId);
-            }
-            // If column missing, fall through and return ALL active channels as a safe fallback
+            $query->where('m3u_source_id', $sourceId);
         } else {
             // No source assigned — return nothing rather than leaking global channels
             $query->whereRaw('1 = 0');

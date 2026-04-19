@@ -73,7 +73,6 @@ services:
         labels:
             - traefik.enable=true
             - traefik.docker.network=dokploy-network
-            # Let Dokploy UI manage all routing rules — do NOT add more labels here
 
     postgres:
         image: postgres:16-alpine

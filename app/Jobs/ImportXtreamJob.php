@@ -145,9 +145,12 @@ class ImportXtreamJob implements ShouldQueue
             }
 
             if (! isset($groupCache[$catName])) {
-                $group             = ChannelGroup::firstOrCreate(
-                    ['name' => $catName],
-                    ['slug' => Str::slug($catName), 'sort_order' => 0, 'is_active' => true],
+                // Scope by m3u_source_id so two sources can have same-named categories
+                // Use a source-prefixed slug to avoid the global unique constraint collision
+                $slug  = Str::slug("s{$this->sourceId}-{$catName}");
+                $group = ChannelGroup::firstOrCreate(
+                    ['slug' => $slug],
+                    ['name' => $catName, 'sort_order' => 0, 'is_active' => true],
                 );
                 $groupCache[$catName] = $group->id;
             }
@@ -235,8 +238,18 @@ class ImportXtreamJob implements ShouldQueue
                 }
             }
 
-            // Build the stream URL in Xtream Codes format
-            $streamUrl = "{$host}/{$username}/{$password}/{$streamId}.{$ext}";
+            // Build the stream URL.
+            // For live streams: use the bare {host}/{user}/{pass}/{stream_id} format.
+            // Xtream Codes servers detect content type from the stream itself.
+            // Some providers (e.g. ugeen) actively reject a .ts suffix despite the API
+            // returning container_extension = "ts", so we never append it for live streams.
+            // For VOD/series, the extension is required (mp4, mkv, etc.).
+            if ($type === 'live') {
+                $streamUrl = "{$host}/{$username}/{$password}/{$streamId}";
+            } else {
+                $containerExt = trim($stream['container_extension'] ?? $ext);
+                $streamUrl    = "{$host}/{$username}/{$password}/{$streamId}.{$containerExt}";
+            }
 
             // Skip base64-encoded logos (data: URIs) — they're too large for DB storage
             $logoUrl = ($icon && ! str_starts_with($icon, 'data:')) ? $icon : null;

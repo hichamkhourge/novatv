@@ -44,6 +44,8 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 # Copy PHP configuration
 COPY docker/php/php.ini /usr/local/etc/php/conf.d/custom.ini
+# Append streaming timeout override — loads after www.conf (alphabetically last)
+COPY docker/php/www.conf /usr/local/etc/php-fpm.d/zzz-streaming.conf
 
 WORKDIR /var/www/html
 
