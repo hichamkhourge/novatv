@@ -100,6 +100,7 @@ COPY --from=app /var/www/html /var/www/html
 
 # Copy nginx config
 COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf
+COPY docker/nginx/maps.conf    /etc/nginx/conf.d/maps.conf
 
 # Create nginx user and set permissions
 RUN chown -R nginx:nginx /var/www/html

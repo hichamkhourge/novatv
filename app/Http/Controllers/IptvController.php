@@ -41,9 +41,12 @@ class IptvController extends Controller
      */
     public function authStream(Request $request): Response
     {
-        $username = $request->server('HTTP_X_STREAM_USERNAME') ?? $request->header('X-Stream-Username');
-        $password = $request->server('HTTP_X_STREAM_PASSWORD') ?? $request->header('X-Stream-Password');
-        $streamId = $request->server('HTTP_X_STREAM_ID')       ?? $request->header('X-Stream-Id');
+        // Credentials are passed by nginx as query params in the auth_request URI:
+        //   auth_request /api/auth/stream?u=$stream_username&p=$stream_password&id=$stream_id
+        // The map directives in maps.conf extract them from the parent request URI.
+        $username = $request->query('u');
+        $password = $request->query('p');
+        $streamId = $request->query('id');
 
         // ── 1. Authenticate ───────────────────────────────────────────────────
         $account = IptvAccount::where('username', $username)
