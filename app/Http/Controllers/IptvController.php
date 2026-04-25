@@ -434,7 +434,7 @@ class IptvController extends Controller
         }
 
         // ── 4. Register session ──────────────────────────────────────────────
-        StreamSession::updateOrCreate(
+        $session = StreamSession::updateOrCreate(
             ['account_id' => $account->id, 'channel_id' => $channelId, 'ip_address' => $ip],
             ['started_at' => now(), 'last_seen_at' => now()],
         );
@@ -530,22 +530,29 @@ class IptvController extends Controller
             ]);
         }
 
-        // If we got nothing, return an error before headers are sent
-        if (empty($prebuffer)) {
+        // Treat < 188 bytes (1 MPEGTS packet) as failure — provider likely returned
+        // an HTML/JSON error page instead of real video data.
+        $minValidBytes = 188;
+        $isValidStream = strlen($prebuffer) >= $minValidBytes;
+
+        if (! $isValidStream) {
             curl_multi_remove_handle($mh, $ch);
             curl_multi_close($mh);
             curl_close($ch);
 
-            // Log connection failure
-            if (config('iptv.logging.connection_diagnostics', false)) {
-                \Log::channel(config('iptv.logging.channel', 'stack'))->error('Stream connection failed', [
-                    'channel_id' => $channelId,
-                    'upstream_url' => $upstreamUrl,
-                    'provider' => $providerConfig['provider_name'],
-                    'warmup_duration_ms' => round($warmupDuration * 1000, 2),
-                    'username' => $username,
-                ]);
-            }
+            // Delete the session so it doesn't block max_connections for the next attempt
+            $session->delete();
+
+            // Always log stream failures so we can diagnose provider issues
+            \Log::error('Stream upstream failed', [
+                'channel_id'       => $channelId,
+                'upstream_url'     => $upstreamUrl,
+                'provider'         => $providerConfig['provider_name'],
+                'prebuffer_bytes'  => strlen($prebuffer),
+                'warmup_ms'        => round($warmupDuration * 1000, 2),
+                'username'         => $username,
+                'response_preview' => substr($prebuffer, 0, 200),
+            ]);
 
             return response('Upstream unavailable', 503, ['Content-Type' => 'text/plain']);
         }
