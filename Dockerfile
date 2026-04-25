@@ -44,8 +44,12 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 # Copy PHP configuration
 COPY docker/php/php.ini /usr/local/etc/php/conf.d/custom.ini
-# Append streaming timeout override — loads after www.conf (alphabetically last)
 COPY docker/php/www.conf /usr/local/etc/php-fpm.d/zzz-streaming.conf
+
+# Force PHP-FPM to listen on 0.0.0.0:9000 — patch any existing listen directives
+# so nginx (a separate container) can connect via TCP regardless of conf file ordering
+RUN find /usr/local/etc/php-fpm.d/ -name '*.conf' -exec \
+    sed -i 's|^listen = .*|listen = 0.0.0.0:9000|g' {} \;
 
 WORKDIR /var/www/html
 
