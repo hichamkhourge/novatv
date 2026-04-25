@@ -440,21 +440,29 @@ class IptvController extends Controller
         );
 
         // ── 5. Stream proxy ──────────────────────────────────────────────────
-        // Strategy: pre-buffer real MPEGTS data from the provider BEFORE returning
-        // the HTTP response headers. This guarantees the client receives real PAT/PMT
-        // tables on the very first byte — compatible with all players (ExoPlayer,
-        // LG TV webOS/AVPlay, VLC, etc.) without any "channel will be back soon" errors.
-        //
-        // The client waits ~2-3s for the response (provider warmup), but once it
-        // starts, playback begins immediately with no format detection delay.
-        $upstreamUrl  = $channel->stream_url;
-        $userAgent    = 'VLC/3.0.20 LibVLC/3.0.20'; // Hardcode VLC to prevent providers from blocking Smart TVs
-        $prebuffering = true;   // true = accumulate in $prebuffer; false = echo directly
-        $prebuffer    = '';
+        // Strategy: connect to provider, validate the first chunk is real MPEGTS
+        // (>= 188 bytes), then send HTTP headers + stream data immediately.
+        // This gives near-instant playback — no waiting for a large pre-buffer.
+        $upstreamUrl    = $channel->stream_url;
+        $userAgent      = 'VLC/3.0.20 LibVLC/3.0.20';
+        $firstChunk     = '';       // Accumulate only until first write callback
+        $headersSent    = false;    // Have we committed the HTTP response yet?
 
         // ── Provider-specific configuration ──────────────────────────────────
         $providerConfig = $this->detectProviderConfig($upstreamUrl, $username, $password);
 
+        if (config('iptv.logging.provider_handling', false)) {
+            \Log::info('Stream proxy provider config', [
+                'provider'           => $providerConfig['provider_name'],
+                'upstream_url'       => $upstreamUrl,
+                'connection_timeout' => $providerConfig['connection_timeout'],
+                'username'           => $username,
+            ]);
+        }
+
+        // ── Phase 1: connect and grab the first data chunk ───────────────────
+        // We run curl just long enough to receive the first chunk from the provider.
+        // This lets us validate it's real MPEGTS before committing any response headers.
         $ch = curl_init($upstreamUrl);
         curl_setopt_array($ch, [
             CURLOPT_FOLLOWLOCATION => true,
@@ -463,120 +471,80 @@ class IptvController extends Controller
             CURLOPT_CONNECTTIMEOUT => $providerConfig['connection_timeout'],
             CURLOPT_USERAGENT      => $userAgent,
             CURLOPT_BUFFERSIZE     => 65536,
-            CURLOPT_SSL_VERIFYPEER => false, // Ensure we can connect to HTTPS CDNs
+            CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => false,
-            CURLOPT_COOKIEFILE     => $providerConfig['use_cookies'] ? '' : null, // CRITICAL: Maintain load-balancer cookies across 302 redirects (Zazy)
-            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1, // Best stability for streaming video
-            CURLOPT_WRITEFUNCTION  => function ($curl, $data) use (&$prebuffering, &$prebuffer): int {
-                if ($prebuffering) {
-                    $prebuffer .= $data;
+            CURLOPT_COOKIEFILE     => $providerConfig['use_cookies'] ? '' : null,
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+            CURLOPT_WRITEFUNCTION  => function ($curl, $data) use (&$firstChunk, &$headersSent): int {
+                if (! $headersSent) {
+                    // Still in validation phase — accumulate
+                    $firstChunk .= $data;
                 } else {
+                    // Headers already sent — pipe directly to client
                     echo $data;
                     if (ob_get_level()) ob_flush();
                     flush();
                 }
                 return strlen($data);
             },
-            CURLOPT_HEADERFUNCTION => static function ($curl, $header): int {
-                return strlen($header);
-            },
+            CURLOPT_HEADERFUNCTION => static fn ($curl, $header): int => strlen($header),
         ]);
 
-        // Log provider-specific handling
-        if (config('iptv.logging.provider_handling', false)) {
-            \Log::channel(config('iptv.logging.channel', 'stack'))->info('Stream proxy provider config', [
-                'provider' => $providerConfig['provider_name'],
-                'upstream_url' => $upstreamUrl,
-                'connection_timeout' => $providerConfig['connection_timeout'],
-                'max_redirects' => $providerConfig['max_redirects'],
-                'use_cookies' => $providerConfig['use_cookies'],
-                'username' => $username,
-            ]);
-        }
-
-        $mh = curl_multi_init();
+        $mh          = curl_multi_init();
         curl_multi_add_handle($mh, $ch);
 
-        // ── Phase 1: pre-buffer until we have real MPEGTS data ───────────────
-        // Wait for at least 7 MPEGTS packets (1316 bytes) or configured timeout.
-        // This ensures PAT/PMT tables are included in the first response bytes.
         $active      = 1;
-        $warmupStart = microtime(true);
-        $prebufferTimeout = config('iptv.stream.prebuffer_timeout', 15);
-        $minBytes = config('iptv.stream.min_mpegts_packets', 7) * 188;
+        $waitStart   = microtime(true);
+        $maxWait     = (float) config('iptv.stream.connection_timeout', 15);
 
+        // Run until we have at least one chunk OR the provider closes/times out
         do {
             curl_multi_exec($mh, $active);
             curl_multi_select($mh, 0.05);
+            if (strlen($firstChunk) > 0) break;  // Got first data — stop waiting
+        } while ($active && (microtime(true) - $waitStart) < $maxWait);
 
-            if (strlen($prebuffer) >= $minBytes) {
-                break;
-            }
-        } while ($active && (microtime(true) - $warmupStart) < $prebufferTimeout);
-
-        $warmupDuration = microtime(true) - $warmupStart;
-        $prebufferBytes = strlen($prebuffer);
-
-        // Log pre-buffer metrics
-        if (config('iptv.logging.prebuffer_metrics', false)) {
-            \Log::channel(config('iptv.logging.channel', 'stack'))->info('Stream pre-buffer complete', [
-                'channel_id' => $channelId,
-                'provider' => $providerConfig['provider_name'],
-                'warmup_duration_ms' => round($warmupDuration * 1000, 2),
-                'prebuffer_bytes' => $prebufferBytes,
-                'target_bytes' => $minBytes,
-                'timeout_reached' => !$active || ($warmupDuration >= $prebufferTimeout),
-                'username' => $username,
-            ]);
-        }
-
-        // Treat < 188 bytes (1 MPEGTS packet) as failure — provider likely returned
-        // an HTML/JSON error page instead of real video data.
-        $minValidBytes = 188;
-        $isValidStream = strlen($prebuffer) >= $minValidBytes;
-
-        if (! $isValidStream) {
+        // ── Phase 2: validate first chunk ────────────────────────────────────
+        // Anything under 188 bytes = provider returned an error page, not MPEGTS.
+        if (strlen($firstChunk) < 188) {
             curl_multi_remove_handle($mh, $ch);
             curl_multi_close($mh);
             curl_close($ch);
-
-            // Delete the session so it doesn't block max_connections for the next attempt
             $session->delete();
 
-            // Always log stream failures so we can diagnose provider issues
             \Log::error('Stream upstream failed', [
                 'channel_id'       => $channelId,
                 'upstream_url'     => $upstreamUrl,
                 'provider'         => $providerConfig['provider_name'],
-                'prebuffer_bytes'  => strlen($prebuffer),
-                'warmup_ms'        => round($warmupDuration * 1000, 2),
+                'first_chunk_bytes'=> strlen($firstChunk),
+                'wait_ms'          => round((microtime(true) - $waitStart) * 1000, 2),
                 'username'         => $username,
-                'response_preview' => substr($prebuffer, 0, 200),
+                'response_preview' => substr($firstChunk, 0, 200),
             ]);
 
             return response('Upstream unavailable', 503, ['Content-Type' => 'text/plain']);
         }
 
-        $bufferedData = $prebuffer;
-        $prebuffer    = '';
-        // $prebuffering stays true until the stream callback sets it false
+        // ── Phase 3: stream response ──────────────────────────────────────────
+        // We have valid data. Capture the first chunk then switch to direct piping.
+        $contentType  = str_ends_with($streamId, '.m3u8')
+            ? 'application/vnd.apple.mpegurl'
+            : 'video/mp2t';
+        $initialData  = $firstChunk;
 
-        // ── Phase 2: respond with buffered data + continue streaming ──────────
-        $contentType = str_ends_with($streamId, '.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t';
-        
-        return response()->stream(function () use ($mh, $ch, $bufferedData, &$prebuffering) {
+        return response()->stream(function () use ($mh, $ch, $initialData, &$headersSent) {
             set_time_limit(0);
             ignore_user_abort(true);
 
-            // Flush buffered real MPEGTS data (contains PAT/PMT) to the client immediately
-            echo $bufferedData;
+            // Send the first chunk (already received) immediately
+            echo $initialData;
             if (ob_get_level()) ob_flush();
             flush();
 
-            // Switch WRITEFUNCTION from buffering to direct echo
-            $prebuffering = false;
+            // Switch write callback to direct-pipe mode
+            $headersSent = true;
 
-            // Continue forwarding the live stream from the same provider connection
+            // Continue piping until provider closes or client disconnects
             $active = 1;
             do {
                 curl_multi_exec($mh, $active);
