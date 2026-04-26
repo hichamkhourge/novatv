@@ -468,6 +468,130 @@ class IptvController extends Controller
     }
 
     /**
+     * Authenticate, validate the channel, then return an internal nginx
+     * redirect so nginx streams the upstream bytes directly.
+     *
+     * PHP remains in the control plane only:
+     *   client -> PHP auth/session check -> nginx internal proxy -> provider
+     *
+     * GET /live/{username}/{password}/{channel_id}.ts
+     */
+    public function streamProxy(
+        Request $request,
+        string $username,
+        string $password,
+        string $streamId
+    ): \Illuminate\Http\Response|\Symfony\Component\HttpFoundation\StreamedResponse {
+        $account = IptvAccount::where('username', $username)
+            ->where('password', $password)
+            ->first();
+
+        if (! $account || ! $account->isActive()) {
+            return response('Unauthorized', 401, ['Content-Type' => 'text/plain']);
+        }
+
+        $channelId = (int) preg_replace('/\.\w+$/', '', $streamId);
+
+        $channel = $this->accountChannels($account)
+            ->where('channels.id', $channelId)
+            ->first();
+
+        if (! $channel || ! $channel->is_active) {
+            \Log::warning('streamProxy: channel not available for account', [
+                'channel_id' => $channelId,
+                'username'   => $username,
+                'account_id' => $account->id,
+                'ip'         => $request->ip(),
+            ]);
+
+            return response('Channel not found', 404, ['Content-Type' => 'text/plain']);
+        }
+
+        $ip = $request->ip();
+
+        $otherActiveIps = StreamSession::where('account_id', $account->id)
+            ->where('last_seen_at', '>', now()->subSeconds(30))
+            ->where('ip_address', '!=', $ip)
+            ->distinct('ip_address')
+            ->count('ip_address');
+
+        if ($otherActiveIps >= $account->max_connections) {
+            \Log::warning('streamProxy: max connections exceeded', [
+                'username'         => $username,
+                'account_id'       => $account->id,
+                'ip'               => $ip,
+                'other_active_ips' => $otherActiveIps,
+                'max_connections'  => $account->max_connections,
+                'channel_id'       => $channelId,
+            ]);
+
+            return response('Max connections reached', 403, ['Content-Type' => 'text/plain']);
+        }
+
+        $providerUrl = $channel->stream_url;
+
+        if (empty($providerUrl)) {
+            \Log::warning('streamProxy: channel has no stream_url', [
+                'channel_id' => $channelId,
+                'username'   => $username,
+            ]);
+
+            return response('Upstream unavailable', 503, ['Content-Type' => 'text/plain']);
+        }
+
+        $finalUrl = $this->resolveStreamUrl($providerUrl);
+
+        if (empty($finalUrl)) {
+            \Log::error('streamProxy: could not resolve stream URL', [
+                'channel_id'   => $channelId,
+                'provider_url' => $providerUrl,
+                'username'     => $username,
+            ]);
+
+            return response('Upstream unavailable', 503, ['Content-Type' => 'text/plain']);
+        }
+
+        $internalRedirect = $this->buildInternalProxyUri($finalUrl);
+
+        if (! $internalRedirect) {
+            \Log::error('streamProxy: could not build internal redirect', [
+                'channel_id' => $channelId,
+                'final_url'  => $finalUrl,
+                'username'   => $username,
+            ]);
+
+            return response('Upstream unavailable', 503, ['Content-Type' => 'text/plain']);
+        }
+
+        StreamSession::updateOrCreate(
+            ['account_id' => $account->id, 'ip_address' => $ip],
+            ['channel_id' => $channelId, 'started_at' => now(), 'last_seen_at' => now()],
+        );
+
+        if (config('iptv.logging.connection_diagnostics', false)) {
+            \Log::info('streamProxy: redirecting to internal nginx proxy', [
+                'username'          => $username,
+                'account_id'        => $account->id,
+                'channel_id'        => $channelId,
+                'ip'                => $ip,
+                'final_url'         => $finalUrl,
+                'internal_redirect' => $internalRedirect,
+            ]);
+        }
+
+        $contentType = str_ends_with($streamId, '.m3u8')
+            ? 'application/vnd.apple.mpegurl'
+            : 'video/mp2t';
+
+        return response('', 200, [
+            'Content-Type'      => $contentType,
+            'Cache-Control'     => 'no-cache, no-store, must-revalidate',
+            'X-Accel-Buffering' => 'no',
+            'X-Accel-Redirect'  => $internalRedirect,
+        ]);
+    }
+
+    /**
      * Authenticate, validate the channel, then stream the content directly.
      *
      * Streaming through PHP (instead of a 302 redirect) is required because
@@ -481,7 +605,7 @@ class IptvController extends Controller
      *
      * GET /live/{username}/{password}/{channel_id}.ts
      */
-    public function streamProxy(
+    public function streamProxyLegacy(
         Request $request,
         string $username,
         string $password,
@@ -672,6 +796,30 @@ class IptvController extends Controller
         }
 
         return $query;
+    }
+
+    private function buildInternalProxyUri(string $upstreamUrl): ?string
+    {
+        $parts = parse_url($upstreamUrl);
+
+        if (! is_array($parts)) {
+            return null;
+        }
+
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+        $host = (string) ($parts['host'] ?? '');
+
+        if (! in_array($scheme, ['http', 'https'], true) || $host === '') {
+            return null;
+        }
+
+        $port = isset($parts['port']) ? ':' . $parts['port'] : '';
+        $path = (string) ($parts['path'] ?? '/');
+        $query = isset($parts['query']) && $parts['query'] !== ''
+            ? '?' . $parts['query']
+            : '';
+
+        return "/_proxy_stream/{$scheme}/{$host}{$port}{$path}{$query}";
     }
 
     private function logAccess(Request $request, IptvAccount $account, string $action, string $status): void
