@@ -43,9 +43,8 @@ services:
             retries: 3
             start_period: 120s
         networks:
-            iptv_network:
-                aliases:
-                    - novatv-fpm
+            - iptv_network
+            - dokploy-network
         labels:
             - traefik.enable=false
 
@@ -136,6 +135,7 @@ services:
                 condition: service_started
         networks:
             - iptv_network
+            - dokploy-network
         labels:
             - traefik.enable=false
 
@@ -172,6 +172,7 @@ services:
                 condition: service_started
         networks:
             - iptv_network
+            - dokploy-network
         labels:
             - traefik.enable=false
 
