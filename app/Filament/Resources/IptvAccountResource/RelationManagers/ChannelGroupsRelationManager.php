@@ -10,7 +10,6 @@ use Filament\Resources\RelationManagers\RelationManager;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Collection;
 
 class ChannelGroupsRelationManager extends RelationManager
@@ -21,20 +20,6 @@ class ChannelGroupsRelationManager extends RelationManager
 
     /** @var array<int, int>|null */
     private ?array $assignedGroupSortMap = null;
-
-    public function getRelationship(): Relation | Builder
-    {
-        $account = $this->ownerAccount();
-
-        return ChannelGroup::query()
-            ->select('channel_groups.*')
-            ->leftJoin('account_channel_groups as acg', function ($join) use ($account) {
-                $join->on('acg.channel_group_id', '=', 'channel_groups.id')
-                    ->where('acg.account_id', '=', $account->id);
-            })
-            ->where('channel_groups.is_active', true)
-            ->when(! $account->allow_adult, fn (Builder $query) => $query->where('channel_groups.is_adult', false));
-    }
 
     public function form(Form $form): Form
     {
@@ -48,6 +33,7 @@ class ChannelGroupsRelationManager extends RelationManager
     public function table(Table $table): Table
     {
         return $table
+            ->query(fn (): Builder => $this->baseGroupsQuery())
             ->modifyQueryUsing(fn (Builder $query) => $query
                 ->orderByRaw('COALESCE(acg.sort_order, channel_groups.sort_order, 0)')
                 ->orderBy('channel_groups.sort_order')
@@ -183,6 +169,20 @@ class ChannelGroupsRelationManager extends RelationManager
         $account = $this->ownerRecord;
 
         return $account;
+    }
+
+    private function baseGroupsQuery(): Builder
+    {
+        $account = $this->ownerAccount();
+
+        return ChannelGroup::query()
+            ->select('channel_groups.*')
+            ->leftJoin('account_channel_groups as acg', function ($join) use ($account) {
+                $join->on('acg.channel_group_id', '=', 'channel_groups.id')
+                    ->where('acg.account_id', '=', $account->id);
+            })
+            ->where('channel_groups.is_active', true)
+            ->when(! $account->allow_adult, fn (Builder $query) => $query->where('channel_groups.is_adult', false));
     }
 
     private function isGroupEnabled(ChannelGroup $group): bool
