@@ -675,12 +675,27 @@ class IptvController extends Controller
 
         // ── Provider-specific configuration ──────────────────────────────────
         $providerConfig = $this->detectProviderConfig($upstreamUrl, $username, $password);
+        $cookieFile = null;
+
+        if ($providerConfig['use_cookies']) {
+            $cookieDir = storage_path('app/iptv-cookies');
+
+            if (! is_dir($cookieDir)) {
+                @mkdir($cookieDir, 0775, true);
+            }
+
+            if (is_dir($cookieDir)) {
+                $cookieFile = tempnam($cookieDir, 'iptv_cookie_') ?: null;
+            }
+        }
 
         if (config('iptv.logging.provider_handling', false)) {
             \Log::info('Stream proxy provider config', [
                 'provider'           => $providerConfig['provider_name'],
                 'upstream_url'       => $upstreamUrl,
                 'connection_timeout' => $providerConfig['connection_timeout'],
+                'use_cookies'        => $providerConfig['use_cookies'],
+                'cookie_file'        => $cookieFile,
                 'username'           => $username,
             ]);
         }
@@ -698,7 +713,8 @@ class IptvController extends Controller
             CURLOPT_BUFFERSIZE     => 65536,
             CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => false,
-            CURLOPT_COOKIEFILE     => $providerConfig['use_cookies'] ? '' : null,
+            CURLOPT_COOKIEFILE     => $providerConfig['use_cookies'] ? ($cookieFile ?: '') : null,
+            CURLOPT_COOKIEJAR      => $providerConfig['use_cookies'] ? ($cookieFile ?: '') : null,
             CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
             CURLOPT_WRITEFUNCTION  => function ($curl, $data) use (&$firstChunk, &$headersSent): int {
                 if (! $headersSent) {
@@ -720,7 +736,7 @@ class IptvController extends Controller
 
         $active      = 1;
         $waitStart   = microtime(true);
-        $maxWait     = (float) config('iptv.stream.connection_timeout', 15);
+        $maxWait     = (float) ($providerConfig['connection_timeout'] ?? config('iptv.stream.connection_timeout', 15));
 
         // Run until we have at least one chunk OR the provider closes/times out
         do {
@@ -736,6 +752,9 @@ class IptvController extends Controller
             curl_multi_close($mh);
             curl_close($ch);
             $session->delete();
+            if ($cookieFile) {
+                @unlink($cookieFile);
+            }
 
             \Log::error('Stream upstream failed', [
                 'channel_id'       => $channelId,
@@ -743,6 +762,7 @@ class IptvController extends Controller
                 'provider'         => $providerConfig['provider_name'],
                 'first_chunk_bytes'=> strlen($firstChunk),
                 'wait_ms'          => round((microtime(true) - $waitStart) * 1000, 2),
+                'cookie_file'      => $cookieFile,
                 'username'         => $username,
                 'response_preview' => substr($firstChunk, 0, 200),
             ]);
@@ -757,7 +777,7 @@ class IptvController extends Controller
             : 'video/mp2t';
         $initialData  = $firstChunk;
 
-        return response()->stream(function () use ($mh, $ch, $initialData, &$headersSent) {
+        return response()->stream(function () use ($mh, $ch, $initialData, &$headersSent, $cookieFile) {
             set_time_limit(0);
             ignore_user_abort(true);
 
@@ -779,6 +799,9 @@ class IptvController extends Controller
             curl_multi_remove_handle($mh, $ch);
             curl_multi_close($mh);
             curl_close($ch);
+            if ($cookieFile) {
+                @unlink($cookieFile);
+            }
         }, 200, [
             'Content-Type'      => $contentType,
             'Cache-Control'     => 'no-cache, no-store, must-revalidate',
