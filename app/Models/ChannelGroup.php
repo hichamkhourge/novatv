@@ -15,10 +15,12 @@ class ChannelGroup extends Model
         'slug',
         'sort_order',
         'is_active',
+        'is_adult',
     ];
 
     protected $casts = [
         'is_active'  => 'boolean',
+        'is_adult'   => 'boolean',
         'sort_order' => 'integer',
     ];
 

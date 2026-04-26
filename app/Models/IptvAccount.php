@@ -18,11 +18,15 @@ class IptvAccount extends Model
         'status',
         'notes',
         'm3u_source_id',
+        'has_group_restrictions',
+        'allow_adult',
     ];
 
     protected $casts = [
-        'expires_at'      => 'datetime',
-        'max_connections' => 'integer',
+        'expires_at'             => 'datetime',
+        'max_connections'        => 'integer',
+        'has_group_restrictions' => 'boolean',
+        'allow_adult'            => 'boolean',
     ];
 
     /**
@@ -52,7 +56,7 @@ class IptvAccount extends Model
 
     /**
      * Channel groups this account has explicit access to.
-     * Empty = access to all active groups.
+     * Whether this list is enforced is controlled by has_group_restrictions.
      */
     public function channelGroups(): BelongsToMany
     {
@@ -100,12 +104,22 @@ class IptvAccount extends Model
     public function resolvedChannelGroups()
     {
         $explicit = $this->channelGroups;
+        $baseQuery = ChannelGroup::active()
+            ->when(! $this->allow_adult, fn (Builder $query) => $query->where('is_adult', false))
+            ->orderBy('sort_order')
+            ->orderBy('name');
 
-        return $explicit->isNotEmpty()
-            ? $explicit->where('is_active', true)->values()
-            : ChannelGroup::active()
-                ->orderBy('sort_order')
-                ->orderBy('name')
-                ->get();
+        if (! $this->has_group_restrictions) {
+            return $baseQuery->get();
+        }
+
+        if ($explicit->isEmpty()) {
+            return ChannelGroup::query()->whereRaw('1 = 0')->get();
+        }
+
+        return $explicit
+            ->where('is_active', true)
+            ->when(! $this->allow_adult, fn ($collection) => $collection->where('is_adult', false))
+            ->values();
     }
 }

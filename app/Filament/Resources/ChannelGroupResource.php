@@ -44,6 +44,10 @@ class ChannelGroupResource extends Resource
                 Forms\Components\Toggle::make('is_active')
                     ->label('Active')
                     ->default(true),
+
+                Forms\Components\Toggle::make('is_adult')
+                    ->label('Adult Category')
+                    ->default(false),
             ])->columns(2),
         ]);
     }
@@ -64,6 +68,11 @@ class ChannelGroupResource extends Resource
 
                 Tables\Columns\ToggleColumn::make('is_active')
                     ->label('Active')
+                    ->sortable(),
+
+                Tables\Columns\IconColumn::make('is_adult')
+                    ->label('Adult')
+                    ->boolean()
                     ->sortable(),
 
                 Tables\Columns\TextColumn::make('sort_order')

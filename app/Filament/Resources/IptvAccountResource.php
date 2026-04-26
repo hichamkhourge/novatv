@@ -114,6 +114,11 @@ class IptvAccountResource extends Resource
                     ->label('Expires At')
                     ->nullable()
                     ->seconds(false),
+
+                Forms\Components\Toggle::make('allow_adult')
+                    ->label('Enable Adult Groups')
+                    ->helperText('When disabled, adult categories are hidden for this account.')
+                    ->default(false),
             ])->columns(3),
 
             Forms\Components\Section::make('Notes')->schema([

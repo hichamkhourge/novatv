@@ -422,6 +422,7 @@ class IptvController extends Controller
         $groupsQuery = ChannelGroup::query()
             ->select('channel_groups.*')
             ->where('channel_groups.is_active', true)
+            ->when(! $account->allow_adult, fn (Builder $query) => $query->where('channel_groups.is_adult', false))
             ->whereExists(function ($sub) use ($sourceId) {
                 $sub->selectRaw('1')
                     ->from('channels')
@@ -857,7 +858,8 @@ class IptvController extends Controller
                 $join->on('acg.channel_group_id', '=', 'channels.channel_group_id')
                     ->where('acg.account_id', '=', $account->id);
             })
-            ->where('channel_groups.is_active', true);
+            ->where('channel_groups.is_active', true)
+            ->when(! $account->allow_adult, fn (Builder $query) => $query->where('channel_groups.is_adult', false));
 
         $sourceId = $account->m3u_source_id ?? null;
 
@@ -884,22 +886,20 @@ class IptvController extends Controller
      * Apply account channel-group visibility rules to a query.
      *
      * Rule:
-     * - If the account has explicit group assignments, only those groups are visible.
-     * - If no assignments exist, all active groups are visible.
+     * - If restrictions are OFF, all active groups are visible.
+     * - If restrictions are ON, only assigned groups are visible.
      */
     private function applyAccountGroupScope(Builder $query, IptvAccount $account, string $groupColumn): void
     {
-        $query->where(function (Builder $scope) use ($account, $groupColumn) {
-            $scope->whereExists(function ($sub) use ($account, $groupColumn) {
-                $sub->selectRaw('1')
-                    ->from('account_channel_groups as acg_filter')
-                    ->where('acg_filter.account_id', $account->id)
-                    ->whereColumn('acg_filter.channel_group_id', $groupColumn);
-            })->orWhereNotExists(function ($sub) use ($account) {
-                $sub->selectRaw('1')
-                    ->from('account_channel_groups as acg_any')
-                    ->where('acg_any.account_id', $account->id);
-            });
+        if (! $account->has_group_restrictions) {
+            return;
+        }
+
+        $query->whereExists(function ($sub) use ($account, $groupColumn) {
+            $sub->selectRaw('1')
+                ->from('account_channel_groups as acg_filter')
+                ->where('acg_filter.account_id', $account->id)
+                ->whereColumn('acg_filter.channel_group_id', $groupColumn);
         });
     }
 
