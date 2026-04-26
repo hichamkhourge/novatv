@@ -75,6 +75,12 @@ class IptvController extends Controller
             ->first();
 
         if (! $channel || ! $channel->is_active) {
+            \Log::warning('authStream: channel not available for account', [
+                'channel_id' => $channelId,
+                'username'   => $username,
+                'account_id' => $account->id,
+                'ip'         => $request->ip(),
+            ]);
             return response('Forbidden', 403);
         }
 
@@ -91,6 +97,14 @@ class IptvController extends Controller
             ->count('ip_address');
 
         if ($otherActiveIps >= $account->max_connections) {
+            \Log::warning('authStream: max connections exceeded', [
+                'username'          => $username,
+                'account_id'        => $account->id,
+                'ip'                => $ip,
+                'other_active_ips'  => $otherActiveIps,
+                'max_connections'   => $account->max_connections,
+                'channel_id'        => $channelId,
+            ]);
             return response('Forbidden', 403);
         }
 
@@ -125,6 +139,16 @@ class IptvController extends Controller
             ['account_id' => $account->id, 'ip_address' => $ip],
             ['channel_id' => $channelId, 'started_at' => now(), 'last_seen_at' => now()],
         );
+
+        if (config('iptv.logging.connection_diagnostics', false)) {
+            \Log::info('authStream: authorized stream', [
+                'username'     => $username,
+                'account_id'   => $account->id,
+                'channel_id'   => $channelId,
+                'ip'           => $ip,
+                'upstream_url' => $finalUrl,
+            ]);
+        }
 
         // ── 6. Return upstream URL for nginx proxy_pass ───────────────────────
         return response('OK', 200, [
