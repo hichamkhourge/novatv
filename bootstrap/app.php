@@ -54,6 +54,13 @@ return Application::configure(basePath: dirname(__DIR__))
                 ->update(['status' => 'expired']);
         })->daily()->name('expire-iptv-accounts')->withoutOverlapping();
 
+        // Renew provider-managed accounts (Zazy, Ugeen, etc.) daily at 03:00
+        $schedule->command('providers:renew')
+            ->dailyAt('03:00')
+            ->name('renew-provider-accounts')
+            ->withoutOverlapping()
+            ->runInBackground();
+
         // Periodic source refresh prevents stale stream_id mappings when
         // providers rotate IDs (common with Xtream/live sources).
         $schedule->call(function () {

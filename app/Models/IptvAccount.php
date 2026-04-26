@@ -20,6 +20,12 @@ class IptvAccount extends Model
         'm3u_source_id',
         'has_group_restrictions',
         'allow_adult',
+        // Provider automation
+        'provider',
+        'provider_account_id',
+        'provider_status',
+        'provider_error',
+        'provider_synced_at',
     ];
 
     protected $casts = [
@@ -27,6 +33,7 @@ class IptvAccount extends Model
         'max_connections'        => 'integer',
         'has_group_restrictions' => 'boolean',
         'allow_adult'            => 'boolean',
+        'provider_synced_at'     => 'datetime',
     ];
 
     protected static function booted(): void

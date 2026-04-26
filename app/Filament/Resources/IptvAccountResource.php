@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\IptvAccountResource\Pages;
 use App\Filament\Resources\IptvAccountResource\RelationManagers\ChannelGroupsRelationManager;
+use App\Jobs\GenerateProviderAccountJob;
 use App\Models\IptvAccount;
 use App\Models\M3uSource;
 use Carbon\Carbon;
@@ -25,17 +26,55 @@ class IptvAccountResource extends Resource
     public static function form(Form $form): Form
     {
         return $form->schema([
+            // ── Provider ─────────────────────────────────────────────────────
+            Forms\Components\Section::make('Provider')->schema([
+                Forms\Components\Select::make('provider')
+                    ->label('Source Provider')
+                    ->options([
+                        'manual' => '✋ Manual (enter credentials yourself)',
+                        'zazy'   => '🤖 Zazy TV (auto-generate via Selenium)',
+                    ])
+                    ->default('manual')
+                    ->required()
+                    ->live()
+                    ->helperText('For automated providers, credentials are generated in the background after saving.'),
+
+                Forms\Components\Placeholder::make('provider_info')
+                    ->label('')
+                    ->content('⏳ After saving, a background job will run the Zazy automation script (2–8 min). The account will show status "pending" until credentials are ready.')
+                    ->visible(fn (Forms\Get $get) => $get('provider') !== 'manual'),
+
+                Forms\Components\Placeholder::make('provider_status_display')
+                    ->label('Automation Status')
+                    ->content(fn ($record) => match ($record?->provider_status) {
+                        'pending' => '⏳ Running…',
+                        'done'    => '✅ Credentials ready',
+                        'failed'  => '❌ Failed: ' . ($record->provider_error ?? 'unknown'),
+                        default   => '—',
+                    })
+                    ->visible(fn ($record) => $record && $record->provider !== 'manual'),
+            ])->columns(1),
+
+            // ── Credentials ──────────────────────────────────────────────────
             Forms\Components\Section::make('Credentials')->schema([
                 Forms\Components\TextInput::make('username')
                     ->required()
                     ->unique(ignoreRecord: true)
                     ->maxLength(255)
-                    ->alphaNum(),
+                    ->alphaNum()
+                    ->helperText(fn (Forms\Get $get) => $get('provider') !== 'manual'
+                        ? 'Used as your client username in this app (not the Zazy username — that is stored in the M3U source)'
+                        : null
+                    ),
 
                 Forms\Components\TextInput::make('password')
-                    ->required()
+                    ->required(fn (Forms\Get $get) => $get('provider') === 'manual')
                     ->maxLength(255)
-                    ->helperText('Stored in plaintext — IPTV clients send it in URLs'),
+                    ->helperText(fn (Forms\Get $get) => $get('provider') !== 'manual'
+                        ? 'Leave blank — will be auto-filled once the provider generates credentials'
+                        : 'Stored in plaintext — IPTV clients send it in URLs'
+                    )
+                    ->default(fn (Forms\Get $get) => $get('provider') !== 'manual' ? 'pending' : null),
             ])->columns(2),
 
             Forms\Components\Section::make('M3U Source')->schema([
@@ -145,6 +184,33 @@ class IptvAccountResource extends Resource
                     ->badge()
                     ->color('info')
                     ->placeholder('— no source —'),
+
+                Tables\Columns\TextColumn::make('provider')
+                    ->label('Provider')
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'zazy'   => 'success',
+                        'ugeen'  => 'warning',
+                        default  => 'gray',
+                    })
+                    ->formatStateUsing(fn (string $state) => match ($state) {
+                        'zazy'   => '🤖 Zazy',
+                        'ugeen'  => '🤖 Ugeen',
+                        default  => '✋ Manual',
+                    })
+                    ->sortable(),
+
+                Tables\Columns\TextColumn::make('provider_status')
+                    ->label('Prov. Status')
+                    ->badge()
+                    ->color(fn (?string $state): string => match ($state) {
+                        'pending' => 'warning',
+                        'done'    => 'success',
+                        'failed'  => 'danger',
+                        default   => 'gray',
+                    })
+                    ->placeholder('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
 
                 Tables\Columns\BadgeColumn::make('status')
                     ->colors([
