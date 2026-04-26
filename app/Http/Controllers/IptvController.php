@@ -50,6 +50,15 @@ class IptvController extends Controller
         $password = $request->query('p');
         $streamId = $request->query('id');
 
+        if (config('iptv.logging.connection_diagnostics', false)) {
+            \Log::info('authStream: request received', [
+                'request_uri' => $request->server('REQUEST_URI'),
+                'path'        => $request->path(),
+                'query'       => $request->query(),
+                'ip'          => $request->ip(),
+            ]);
+        }
+
         // ── 1. Authenticate ───────────────────────────────────────────────────
         $account = IptvAccount::where('username', $username)
             ->where('password', $password)
@@ -153,6 +162,7 @@ class IptvController extends Controller
         // ── 6. Return upstream URL for nginx proxy_pass ───────────────────────
         return response('OK', 200, [
             'X-Upstream-URL' => $finalUrl,
+            'X-Auth-Route'   => 'authStream',
             'Content-Type'   => 'text/plain',
         ]);
     }
