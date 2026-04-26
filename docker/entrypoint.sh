@@ -19,6 +19,17 @@ run_cmd() {
     fi
 }
 
+run_cmd_or_exit() {
+    echo "→ $1"
+    if eval "$2" 2>&1; then
+        echo "  ✓ Success"
+        return 0
+    else
+        echo "  ✗ Failed"
+        exit 1
+    fi
+}
+
 # Check critical environment variables
 echo "1. Checking environment..."
 echo "   APP_NAME: ${APP_NAME:-NOT SET}"
@@ -78,7 +89,8 @@ echo ""
 # Database migrations (only if DB is ready)
 if [ $DB_READY -eq 1 ]; then
     echo "7. Running database migrations..."
-    run_cmd "Running migrations" "php artisan migrate --force"
+    run_cmd_or_exit "Running migrations" "php artisan migrate --force"
+    run_cmd_or_exit "Verifying migrations are up to date" "php artisan app:ensure-no-pending-migrations --ansi"
     echo ""
 
     echo "8. Seeding admin user (first run only)..."

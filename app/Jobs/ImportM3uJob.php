@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Channel;
 use App\Models\ChannelGroup;
 use App\Models\M3uSource;
+use App\Support\ChannelGroupAdultClassifier;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -107,7 +108,12 @@ class ImportM3uJob implements ShouldQueue
                     if (! isset($groupCache[$groupName])) {
                         $group                  = ChannelGroup::firstOrCreate(
                             ['name' => $groupName],
-                            ['slug' => Str::slug($groupName), 'sort_order' => 0, 'is_active' => true],
+                            [
+                                'slug' => Str::slug($groupName),
+                                'sort_order' => 0,
+                                'is_active' => true,
+                                'is_adult' => ChannelGroupAdultClassifier::isAdult($groupName),
+                            ],
                         );
                         $groupCache[$groupName] = $group->id;
                     }

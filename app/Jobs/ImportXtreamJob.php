@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Channel;
 use App\Models\ChannelGroup;
 use App\Models\M3uSource;
+use App\Support\ChannelGroupAdultClassifier;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -169,7 +170,12 @@ class ImportXtreamJob implements ShouldQueue
                 $slug  = Str::slug("s{$this->sourceId}-{$catName}");
                 $group = ChannelGroup::firstOrCreate(
                     ['slug' => $slug],
-                    ['name' => $catName, 'sort_order' => 0, 'is_active' => true],
+                    [
+                        'name' => $catName,
+                        'sort_order' => 0,
+                        'is_active' => true,
+                        'is_adult' => ChannelGroupAdultClassifier::isAdult($catName),
+                    ],
                 );
                 $groupCache[$catName] = $group->id;
             }

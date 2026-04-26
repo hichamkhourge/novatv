@@ -86,6 +86,7 @@ class ChannelGroupsRelationManager extends RelationManager
                         ]);
 
                         $this->reloadCachedState();
+                        $this->resetTable();
                     })
                     ->successNotificationTitle('Adult access updated'),
 
@@ -346,5 +347,6 @@ class ChannelGroupsRelationManager extends RelationManager
         $this->assignedGroupSortMap = null;
         $this->ownerRecord->refresh();
         $this->ownerRecord->unsetRelation('channelGroups');
+        $this->flushCachedTableRecords();
     }
 }
