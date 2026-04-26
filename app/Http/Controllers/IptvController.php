@@ -539,6 +539,21 @@ class IptvController extends Controller
             return response('Upstream unavailable', 503, ['Content-Type' => 'text/plain']);
         }
 
+        $providerConfig = $this->detectProviderConfig($providerUrl, $username, $password);
+
+        if (($providerConfig['provider_name'] ?? 'generic') === 'zazy') {
+            if (config('iptv.logging.provider_handling', false)) {
+                \Log::info('streamProxy: using legacy proxy path for zazy', [
+                    'username'     => $username,
+                    'channel_id'   => $channelId,
+                    'provider_url' => $providerUrl,
+                    'fix_mode'     => $providerConfig['fix_mode'] ?? 'unknown',
+                ]);
+            }
+
+            return $this->streamProxyLegacy($request, $username, $password, $streamId);
+        }
+
         $finalUrl = $this->resolveStreamUrl($providerUrl);
 
         if (empty($finalUrl)) {
@@ -632,20 +647,21 @@ class IptvController extends Controller
         }
 
         // ── 3. Connection limit ──────────────────────────────────────────────
-        $ip             = $request->ip();
-        $activeSessions = StreamSession::where('account_id', $account->id)
+        $ip = $request->ip();
+        $otherActiveIps = StreamSession::where('account_id', $account->id)
             ->where('last_seen_at', '>', now()->subSeconds(30))
-            ->where(fn ($q) => $q->where('channel_id', '!=', $channelId)->orWhere('ip_address', '!=', $ip))
-            ->count();
+            ->where('ip_address', '!=', $ip)
+            ->distinct('ip_address')
+            ->count('ip_address');
 
-        if ($activeSessions >= $account->max_connections) {
+        if ($otherActiveIps >= $account->max_connections) {
             return response('Max connections reached', 403, ['Content-Type' => 'text/plain']);
         }
 
         // ── 4. Register session ──────────────────────────────────────────────
         $session = StreamSession::updateOrCreate(
-            ['account_id' => $account->id, 'channel_id' => $channelId, 'ip_address' => $ip],
-            ['started_at' => now(), 'last_seen_at' => now()],
+            ['account_id' => $account->id, 'ip_address' => $ip],
+            ['channel_id' => $channelId, 'started_at' => now(), 'last_seen_at' => now()],
         );
 
         // ── 5. Stream proxy ──────────────────────────────────────────────────
