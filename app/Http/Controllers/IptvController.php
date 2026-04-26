@@ -311,13 +311,13 @@ class IptvController extends Controller
         $username = $account->username;
         $password = $account->password;
 
-        return response()->stream(function () use ($channels, $baseUrl, $username, $password) {
+        return response()->stream(function () use ($channels, $baseUrl, $username, $password, $account) {
             echo "#EXTM3U\r\n";
 
             foreach ($channels as $channel) {
                 // .ts extension tells ExoPlayer this is MPEGTS → no HLS probe → instant start
                 // streamProxy strips the extension and redirects to the correct provider URL
-                $streamUrl = "{$baseUrl}/live/{$username}/{$password}/{$channel->id}.ts";
+                $streamUrl = $this->buildClientStreamUrl($account, $channel, $baseUrl, $username, $password);
 
                 echo sprintf(
                     "#EXTINF:-1 tvg-id=\"%s\" tvg-name=\"%s\" tvg-logo=\"%s\" group-title=\"%s\",%s\r\n%s\r\n",
@@ -441,6 +441,9 @@ class IptvController extends Controller
     private function getLiveStreams(IptvAccount $account, Request $request): JsonResponse
     {
         $categoryId = $request->input('category_id');
+        $baseUrl = rtrim(config('app.url'), '/');
+        $username = $account->username;
+        $password = $account->password;
 
         $query = $this->accountChannels($account);
 
@@ -448,21 +451,28 @@ class IptvController extends Controller
             $query->where('channel_group_id', (int) $categoryId);
         }
 
-        $streams = $query->get()->values()->map(fn (Channel $ch, int $i) => [
-            'num'                 => $i + 1,
-            'name'                => $ch->name,
-            'stream_type'         => 'live',
-            'stream_id'           => $ch->id,
-            'stream_icon'         => $ch->logo_url ?? '',
-            'epg_channel_id'      => $ch->tvg_id ?? '',
-            'added'               => (string) ($ch->created_at?->timestamp ?? 0),
-            'category_id'         => (string) ($ch->channel_group_id ?? ''),
-            'custom_sid'          => '',
-            'tv_archive'          => 0,
-            'tv_archive_duration' => 0,
-            'direct_source'       => '',
-            'thumbnail'           => $ch->logo_url ?? '',
-        ]);
+        $streams = $query->get()->values()->map(function (Channel $ch, int $i) use ($account, $baseUrl, $username, $password) {
+            $streamUrl = $this->buildClientStreamUrl($account, $ch, $baseUrl, $username, $password);
+            $useDirectSource = $this->shouldUseDirectSource($account, $ch);
+            $containerExtension = $this->inferStreamExtension($account, $ch);
+
+            return [
+                'num'                 => $i + 1,
+                'name'                => $ch->name,
+                'stream_type'         => 'live',
+                'stream_id'           => $ch->id,
+                'stream_icon'         => $ch->logo_url ?? '',
+                'epg_channel_id'      => $ch->tvg_id ?? '',
+                'added'               => (string) ($ch->created_at?->timestamp ?? 0),
+                'category_id'         => (string) ($ch->channel_group_id ?? ''),
+                'custom_sid'          => '',
+                'tv_archive'          => 0,
+                'tv_archive_duration' => 0,
+                'direct_source'       => $useDirectSource ? $streamUrl : '',
+                'container_extension' => $containerExtension,
+                'thumbnail'           => $ch->logo_url ?? '',
+            ];
+        });
 
         return response()->json($streams);
     }
@@ -835,6 +845,55 @@ class IptvController extends Controller
         }
 
         return $query;
+    }
+
+    private function buildClientStreamUrl(
+        IptvAccount $account,
+        Channel $channel,
+        string $baseUrl,
+        string $username,
+        string $password
+    ): string {
+        if ($this->shouldUseDirectSource($account, $channel) && ! empty($channel->stream_url)) {
+            return $channel->stream_url;
+        }
+
+        return "{$baseUrl}/live/{$username}/{$password}/{$channel->id}.ts";
+    }
+
+    private function shouldUseDirectSource(IptvAccount $account, ?Channel $channel = null): bool
+    {
+        $source = $account->m3uSource;
+
+        if ($source) {
+            $providerType = strtolower((string) ($source->getAttribute('provider_type') ?? ''));
+            if ($providerType === 'zazy') {
+                return true;
+            }
+
+            if ((bool) ($source->getAttribute('use_direct_urls') ?? false)) {
+                return true;
+            }
+        }
+
+        $probeUrl = (string) ($channel?->stream_url ?? $source?->xtream_host ?? $source?->url ?? '');
+        $providerConfig = $this->detectProviderConfig($probeUrl, $account->username, $account->password);
+
+        return ($providerConfig['provider_name'] ?? 'generic') === 'zazy';
+    }
+
+    private function inferStreamExtension(IptvAccount $account, ?Channel $channel = null): string
+    {
+        $source = $account->m3uSource;
+        $configured = strtolower((string) ($source?->getAttribute('stream_extension') ?? ''));
+
+        if ($configured !== '') {
+            return $configured;
+        }
+
+        $streamUrl = strtolower((string) ($channel?->stream_url ?? ''));
+
+        return str_ends_with($streamUrl, '.m3u8') ? 'm3u8' : 'ts';
     }
 
     private function buildInternalProxyUri(string $upstreamUrl): ?string
