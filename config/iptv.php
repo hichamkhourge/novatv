@@ -107,6 +107,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Source Sync Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Periodic source re-import keeps channel stream IDs fresh, especially for
+    | Xtream providers that rotate IDs over time.
+    |
+    */
+
+    'sources' => [
+        'auto_sync_enabled' => env('IPTV_SOURCE_AUTO_SYNC_ENABLED', true),
+        'auto_sync_stale_minutes' => env('IPTV_SOURCE_AUTO_SYNC_STALE_MINUTES', 180),
+        'auto_sync_batch_size' => env('IPTV_SOURCE_AUTO_SYNC_BATCH_SIZE', 2),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Logging Configuration
     |--------------------------------------------------------------------------
     |

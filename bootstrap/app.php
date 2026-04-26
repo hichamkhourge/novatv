@@ -1,12 +1,16 @@
 <?php
 
+use App\Jobs\ImportM3uJob;
+use App\Jobs\ImportXtreamJob;
 use App\Models\IptvAccount;
+use App\Models\M3uSource;
 use App\Models\StreamSession;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Log;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -49,6 +53,69 @@ return Application::configure(basePath: dirname(__DIR__))
                 ->where('expires_at', '<', now())
                 ->update(['status' => 'expired']);
         })->daily()->name('expire-iptv-accounts')->withoutOverlapping();
+
+        // Periodic source refresh prevents stale stream_id mappings when
+        // providers rotate IDs (common with Xtream/live sources).
+        $schedule->call(function () {
+            if (! config('iptv.sources.auto_sync_enabled', true)) {
+                return;
+            }
+
+            $staleMinutes = max((int) config('iptv.sources.auto_sync_stale_minutes', 180), 5);
+            $batchSize = max((int) config('iptv.sources.auto_sync_batch_size', 2), 1);
+            $staleBefore = now()->subMinutes($staleMinutes);
+
+            $sources = M3uSource::query()
+                ->where('is_active', true)
+                ->where('status', '!=', 'syncing')
+                ->where(function ($query) use ($staleBefore) {
+                    $query->whereNull('last_synced_at')
+                        ->orWhere('last_synced_at', '<=', $staleBefore);
+                })
+                ->orderBy('last_synced_at')
+                ->limit($batchSize)
+                ->get();
+
+            foreach ($sources as $source) {
+                try {
+                    if ($source->isXtream()) {
+                        if (! $source->xtream_host || ! $source->xtream_username || ! $source->xtream_password) {
+                            Log::warning('auto-sync skipped xtream source with missing credentials', [
+                                'source_id' => $source->id,
+                                'name' => $source->name,
+                            ]);
+                            continue;
+                        }
+
+                        $source->update(['status' => 'syncing', 'error_message' => null]);
+                        ImportXtreamJob::dispatch($source->id);
+                        continue;
+                    }
+
+                    $importSource = $source->isFileSource()
+                        ? $source->getFullFilePath()
+                        : $source->url;
+
+                    if (! $importSource) {
+                        Log::warning('auto-sync skipped source with no URL/file', [
+                            'source_id' => $source->id,
+                            'name' => $source->name,
+                            'source_type' => $source->source_type,
+                        ]);
+                        continue;
+                    }
+
+                    $source->update(['status' => 'syncing', 'error_message' => null]);
+                    ImportM3uJob::dispatch($importSource, $source->id);
+                } catch (\Throwable $e) {
+                    Log::error('auto-sync dispatch failed', [
+                        'source_id' => $source->id,
+                        'name' => $source->name,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        })->everyTenMinutes()->name('auto-sync-active-sources')->withoutOverlapping();
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //
