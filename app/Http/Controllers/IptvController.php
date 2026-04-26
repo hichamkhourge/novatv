@@ -10,6 +10,7 @@ use App\Models\StreamSession;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Schema;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
@@ -865,21 +866,33 @@ class IptvController extends Controller
     {
         $source = $account->m3uSource;
 
-        if ($source) {
-            $providerType = strtolower((string) ($source->getAttribute('provider_type') ?? ''));
-            if ($providerType === 'zazy') {
-                return true;
-            }
+        if (! $source) {
+            return false;
+        }
 
-            if ((bool) ($source->getAttribute('use_direct_urls') ?? false)) {
-                return true;
+        // Only use direct_source when it's explicitly enabled in schema/data.
+        // Never auto-enable it based on username/password heuristics because
+        // that can silently bypass our stable /live proxy path for one provider.
+        if (! $this->supportsSourceDirectUrlFlag()) {
+            return false;
+        }
+
+        return (bool) ($source->getAttribute('use_direct_urls') ?? false);
+    }
+
+    private function supportsSourceDirectUrlFlag(): bool
+    {
+        static $hasColumn;
+
+        if ($hasColumn === null) {
+            try {
+                $hasColumn = Schema::hasColumn('m3u_sources', 'use_direct_urls');
+            } catch (\Throwable) {
+                $hasColumn = false;
             }
         }
 
-        $probeUrl = (string) ($channel?->stream_url ?? $source?->xtream_host ?? $source?->url ?? '');
-        $providerConfig = $this->detectProviderConfig($probeUrl, $account->username, $account->password);
-
-        return ($providerConfig['provider_name'] ?? 'generic') === 'zazy';
+        return $hasColumn;
     }
 
     private function inferStreamExtension(IptvAccount $account, ?Channel $channel = null): string
