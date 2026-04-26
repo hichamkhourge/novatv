@@ -7,6 +7,7 @@ use App\Models\Channel;
 use App\Models\ChannelGroup;
 use App\Models\IptvAccount;
 use App\Models\StreamSession;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -20,7 +21,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  *  - Nginx auth_request (/api/auth/stream)
  *  - Stream proxy fallback (/live/{username}/{password}/{id}.ts|m3u8)
  *
- * Channels are always scoped to the account's linked M3U source.
+ * Channels are always scoped to the account's linked M3U source and
+ * filtered by explicit account channel-group access (if assigned).
  */
 class IptvController extends Controller
 {
@@ -80,7 +82,7 @@ class IptvController extends Controller
         // ── 2. Find channel ───────────────────────────────────────────────────
         $channelId = (int) preg_replace('/\.\w+$/', '', (string) $streamId);
 
-        $channel = $this->accountChannels($account)
+        $channel = $this->accountChannels($account, ordered: false)
             ->where('channels.id', $channelId)
             ->first();
 
@@ -417,13 +419,25 @@ class IptvController extends Controller
         }
 
         // Find all distinct channel_group_ids used by this source's channels
-        $groupIds = Channel::where('m3u_source_id', $sourceId)
-            ->where('is_active', true)
-            ->distinct()
-            ->pluck('channel_group_id');
+        $groupsQuery = ChannelGroup::query()
+            ->select('channel_groups.*')
+            ->where('channel_groups.is_active', true)
+            ->whereExists(function ($sub) use ($sourceId) {
+                $sub->selectRaw('1')
+                    ->from('channels')
+                    ->whereColumn('channels.channel_group_id', 'channel_groups.id')
+                    ->where('channels.is_active', true)
+                    ->where('channels.m3u_source_id', $sourceId);
+            })
+            ->leftJoin('account_channel_groups as acg', function ($join) use ($account) {
+                $join->on('acg.channel_group_id', '=', 'channel_groups.id')
+                    ->where('acg.account_id', '=', $account->id);
+            });
 
-        $groups = ChannelGroup::whereIn('id', $groupIds)
-            ->orderBy('name')
+        $this->applyAccountGroupScope($groupsQuery, $account, 'channel_groups.id');
+        $this->applyAccountGroupOrdering($groupsQuery);
+
+        $groups = $groupsQuery
             ->get()
             ->map(fn (ChannelGroup $g) => [
                 'category_id'   => (string) $g->id,
@@ -449,7 +463,7 @@ class IptvController extends Controller
         $query = $this->accountChannels($account);
 
         if ($categoryId) {
-            $query->where('channel_group_id', (int) $categoryId);
+            $query->where('channels.channel_group_id', (int) $categoryId);
         }
 
         $streams = $query->get()->values()->map(function (Channel $ch, int $i) use ($account, $baseUrl, $username, $password) {
@@ -503,7 +517,7 @@ class IptvController extends Controller
 
         $channelId = (int) preg_replace('/\.\w+$/', '', $streamId);
 
-        $channel = $this->accountChannels($account)
+        $channel = $this->accountChannels($account, ordered: false)
             ->where('channels.id', $channelId)
             ->first();
 
@@ -649,7 +663,7 @@ class IptvController extends Controller
         // ── 2. Find channel ──────────────────────────────────────────────────
         $channelId = (int) preg_replace('/\.\w+$/', '', $streamId);
 
-        $channel = $this->accountChannels($account)
+        $channel = $this->accountChannels($account, ordered: false)
             ->where('channels.id', $channelId)
             ->first();
 
@@ -833,19 +847,73 @@ class IptvController extends Controller
      * If the account has no source assigned, returns an empty query
      * so the client sees no channels (rather than the global pool).
      */
-    private function accountChannels(IptvAccount $account): \Illuminate\Database\Eloquent\Builder
+    private function accountChannels(IptvAccount $account, bool $ordered = true): Builder
     {
-        $query    = Channel::active()->orderBy('sort_order');
+        $query = Channel::query()
+            ->select('channels.*')
+            ->active()
+            ->join('channel_groups', 'channel_groups.id', '=', 'channels.channel_group_id')
+            ->leftJoin('account_channel_groups as acg', function ($join) use ($account) {
+                $join->on('acg.channel_group_id', '=', 'channels.channel_group_id')
+                    ->where('acg.account_id', '=', $account->id);
+            })
+            ->where('channel_groups.is_active', true);
+
         $sourceId = $account->m3u_source_id ?? null;
 
         if ($sourceId) {
-            $query->where('m3u_source_id', $sourceId);
+            $query->where('channels.m3u_source_id', $sourceId);
         } else {
             // No source assigned — return nothing rather than leaking global channels
             $query->whereRaw('1 = 0');
         }
 
+        $this->applyAccountGroupScope($query, $account, 'channels.channel_group_id');
+
+        if ($ordered) {
+            $this->applyAccountGroupOrdering($query);
+
+            $query->orderBy('channels.sort_order')
+                ->orderBy('channels.id');
+        }
+
         return $query;
+    }
+
+    /**
+     * Apply account channel-group visibility rules to a query.
+     *
+     * Rule:
+     * - If the account has explicit group assignments, only those groups are visible.
+     * - If no assignments exist, all active groups are visible.
+     */
+    private function applyAccountGroupScope(Builder $query, IptvAccount $account, string $groupColumn): void
+    {
+        $query->where(function (Builder $scope) use ($account, $groupColumn) {
+            $scope->whereExists(function ($sub) use ($account, $groupColumn) {
+                $sub->selectRaw('1')
+                    ->from('account_channel_groups as acg_filter')
+                    ->where('acg_filter.account_id', $account->id)
+                    ->whereColumn('acg_filter.channel_group_id', $groupColumn);
+            })->orWhereNotExists(function ($sub) use ($account) {
+                $sub->selectRaw('1')
+                    ->from('account_channel_groups as acg_any')
+                    ->where('acg_any.account_id', $account->id);
+            });
+        });
+    }
+
+    /**
+     * Apply consistent group ordering:
+     * 1) account-specific pivot sort_order
+     * 2) global group sort_order
+     * 3) group name
+     */
+    private function applyAccountGroupOrdering(Builder $query): void
+    {
+        $query->orderByRaw('COALESCE(acg.sort_order, channel_groups.sort_order, 0)')
+            ->orderBy('channel_groups.sort_order')
+            ->orderBy('channel_groups.name');
     }
 
     private function buildClientStreamUrl(

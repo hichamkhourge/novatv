@@ -40,6 +40,6 @@ class Channel extends Model
     /** Scope to filter active channels only */
     public function scopeActive(Builder $query): Builder
     {
-        return $query->where('is_active', true);
+        return $query->where('channels.is_active', true);
     }
 }

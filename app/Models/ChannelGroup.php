@@ -40,7 +40,8 @@ class ChannelGroup extends Model
     /** Accounts with specific access to this group */
     public function iptvAccounts(): BelongsToMany
     {
-        return $this->belongsToMany(IptvAccount::class, 'account_channel_groups', 'channel_group_id', 'account_id');
+        return $this->belongsToMany(IptvAccount::class, 'account_channel_groups', 'channel_group_id', 'account_id')
+            ->withPivot('sort_order');
     }
 
     /** Scope to only active groups */

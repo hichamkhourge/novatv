@@ -56,7 +56,11 @@ class IptvAccount extends Model
      */
     public function channelGroups(): BelongsToMany
     {
-        return $this->belongsToMany(ChannelGroup::class, 'account_channel_groups', 'account_id', 'channel_group_id');
+        return $this->belongsToMany(ChannelGroup::class, 'account_channel_groups', 'account_id', 'channel_group_id')
+            ->withPivot('sort_order')
+            ->orderBy('account_channel_groups.sort_order')
+            ->orderBy('channel_groups.sort_order')
+            ->orderBy('channel_groups.name');
     }
 
     /**
@@ -98,7 +102,10 @@ class IptvAccount extends Model
         $explicit = $this->channelGroups;
 
         return $explicit->isNotEmpty()
-            ? $explicit
-            : ChannelGroup::active()->get();
+            ? $explicit->where('is_active', true)->values()
+            : ChannelGroup::active()
+                ->orderBy('sort_order')
+                ->orderBy('name')
+                ->get();
     }
 }
