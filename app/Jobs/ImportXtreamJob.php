@@ -54,6 +54,25 @@ class ImportXtreamJob implements ShouldQueue
             return;
         }
 
+        // Prevent recursive/self-hosted imports.
+        // If the Xtream host points to this panel domain, we end up importing
+        // our own proxied API output instead of the real upstream provider.
+        if ($this->isSelfHostedXtream($host)) {
+            $appUrl = (string) config('app.url', '');
+            $message = "Invalid Xtream host: {$host}. Use upstream provider host, not this panel URL ({$appUrl}).";
+
+            $m3uSource->update(['status' => 'error', 'error_message' => $message]);
+
+            Log::error('ImportXtreamJob: blocked self-hosted xtream source', [
+                'source_id'   => $this->sourceId,
+                'source_name' => $m3uSource->name,
+                'xtream_host' => $host,
+                'app_url'     => $appUrl,
+            ]);
+
+            return;
+        }
+
         $m3uSource->update(['status' => 'syncing', 'error_message' => null]);
 
         // Excluded groups (lowercase for case-insensitive matching)
@@ -289,5 +308,33 @@ class ImportXtreamJob implements ShouldQueue
             'error_message' => $exception->getMessage(),
         ]);
         Log::error('ImportXtreamJob: Failed', ['sourceId' => $this->sourceId, 'error' => $exception->getMessage()]);
+    }
+
+    private function isSelfHostedXtream(string $host): bool
+    {
+        $xtreamHost = $this->extractHost($host);
+        $appHost = $this->extractHost((string) config('app.url', ''));
+
+        if ($xtreamHost === '' || $appHost === '') {
+            return false;
+        }
+
+        return $xtreamHost === $appHost;
+    }
+
+    private function extractHost(string $value): string
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return '';
+        }
+
+        if (! str_contains($value, '://')) {
+            $value = 'http://' . $value;
+        }
+
+        $host = parse_url($value, PHP_URL_HOST);
+
+        return strtolower((string) ($host ?? ''));
     }
 }
