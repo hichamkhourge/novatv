@@ -63,10 +63,10 @@ class ChannelGroupsRelationManager extends RelationManager
                     ->alignCenter()
                     ->getStateUsing(fn (ChannelGroup $record): int => $this->resolveSortOrder($record)),
 
-                Tables\Columns\TextColumn::make('channels_count')
-                    ->counts('channels')
+                Tables\Columns\TextColumn::make('source_channels_count')
                     ->label('Channels')
-                    ->alignCenter(),
+                    ->alignCenter()
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query->orderBy('source_channels_count', $direction)),
             ])
             ->headerActions([
                 Tables\Actions\Action::make('adult_access')
@@ -92,7 +92,7 @@ class ChannelGroupsRelationManager extends RelationManager
                 Tables\Actions\Action::make('enable_all')
                     ->label('Enable All Active')
                     ->icon('heroicon-o-check-circle')
-                    ->visible(fn (): bool => (bool) $this->ownerAccount()->has_group_restrictions)
+                    ->visible(fn (): bool => (bool) $this->ownerAccount()->m3u_source_id && (bool) $this->ownerAccount()->has_group_restrictions)
                     ->requiresConfirmation()
                     ->action(function (): void {
                         $account = $this->ownerAccount();
@@ -104,6 +104,7 @@ class ChannelGroupsRelationManager extends RelationManager
                     ->label('Disable All Active')
                     ->icon('heroicon-o-x-circle')
                     ->color('warning')
+                    ->visible(fn (): bool => (bool) $this->ownerAccount()->m3u_source_id)
                     ->requiresConfirmation()
                     ->action(function (): void {
                         $account = $this->ownerAccount();
@@ -160,7 +161,9 @@ class ChannelGroupsRelationManager extends RelationManager
             ->paginated([25, 50, 100])
             ->defaultPaginationPageOption(25)
             ->emptyStateHeading('No active groups')
-            ->emptyStateDescription('No active channel groups are available for this account.');
+            ->emptyStateDescription(fn (): string => $this->ownerAccount()->m3u_source_id
+                ? 'No active channel groups are available for this source.'
+                : 'Select an M3U source for this account to manage group access.');
     }
 
     private function ownerAccount(): IptvAccount
@@ -174,15 +177,25 @@ class ChannelGroupsRelationManager extends RelationManager
     private function baseGroupsQuery(): Builder
     {
         $account = $this->ownerAccount();
+        $sourceId = $account->m3u_source_id;
 
-        return ChannelGroup::query()
+        return $this->sourceScopedGroupsQuery()
             ->select('channel_groups.*')
             ->leftJoin('account_channel_groups as acg', function ($join) use ($account) {
                 $join->on('acg.channel_group_id', '=', 'channel_groups.id')
                     ->where('acg.account_id', '=', $account->id);
             })
-            ->where('channel_groups.is_active', true)
-            ->when(! $account->allow_adult, fn (Builder $query) => $query->where('channel_groups.is_adult', false));
+            ->withCount([
+                'channels as source_channels_count' => function (Builder $query) use ($sourceId): void {
+                    if (! $sourceId) {
+                        $query->whereRaw('1 = 0');
+                        return;
+                    }
+
+                    $query->where('channels.m3u_source_id', $sourceId)
+                        ->where('channels.is_active', true);
+                },
+            ]);
     }
 
     private function isGroupEnabled(ChannelGroup $group): bool
@@ -274,8 +287,20 @@ class ChannelGroupsRelationManager extends RelationManager
             return $this->assignedGroupSortMap;
         }
 
-        $this->assignedGroupSortMap = $this->ownerAccount()
-            ->channelGroups()
+        $sourceId = $this->ownerAccount()->m3u_source_id;
+        if (! $sourceId) {
+            $this->assignedGroupSortMap = [];
+            return $this->assignedGroupSortMap;
+        }
+
+        $this->assignedGroupSortMap = $this->ownerAccount()->channelGroups()
+            ->whereExists(function ($sub) use ($sourceId) {
+                $sub->selectRaw('1')
+                    ->from('channels')
+                    ->whereColumn('channels.channel_group_id', 'channel_groups.id')
+                    ->where('channels.m3u_source_id', $sourceId)
+                    ->where('channels.is_active', true);
+            })
             ->pluck('account_channel_groups.sort_order', 'channel_groups.id')
             ->mapWithKeys(fn ($sortOrder, $groupId) => [(int) $groupId => (int) $sortOrder])
             ->all();
@@ -288,14 +313,32 @@ class ChannelGroupsRelationManager extends RelationManager
      */
     private function getVisibleGroups(): Collection
     {
-        $account = $this->ownerAccount();
-
-        return ChannelGroup::query()
-            ->where('is_active', true)
-            ->when(! $account->allow_adult, fn (Builder $query) => $query->where('is_adult', false))
+        return $this->sourceScopedGroupsQuery()
             ->orderBy('sort_order')
             ->orderBy('name')
             ->get(['id', 'sort_order', 'name', 'is_adult']);
+    }
+
+    private function sourceScopedGroupsQuery(): Builder
+    {
+        $account = $this->ownerAccount();
+        $sourceId = $account->m3u_source_id;
+
+        $query = ChannelGroup::query()
+            ->where('channel_groups.is_active', true)
+            ->when(! $account->allow_adult, fn (Builder $builder) => $builder->where('channel_groups.is_adult', false));
+
+        if (! $sourceId) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        return $query->whereExists(function ($sub) use ($sourceId) {
+            $sub->selectRaw('1')
+                ->from('channels')
+                ->whereColumn('channels.channel_group_id', 'channel_groups.id')
+                ->where('channels.m3u_source_id', $sourceId)
+                ->where('channels.is_active', true);
+        });
     }
 
     private function reloadCachedState(): void

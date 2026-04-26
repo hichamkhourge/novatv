@@ -29,6 +29,21 @@ class IptvAccount extends Model
         'allow_adult'            => 'boolean',
     ];
 
+    protected static function booted(): void
+    {
+        static::updating(function (IptvAccount $account): void {
+            if ($account->isDirty('m3u_source_id')) {
+                $account->has_group_restrictions = false;
+            }
+        });
+
+        static::updated(function (IptvAccount $account): void {
+            if ($account->wasChanged('m3u_source_id')) {
+                $account->channelGroups()->detach();
+            }
+        });
+    }
+
     /**
      * The M3U source this account is linked to.
      * Channels served to this user come from this source only.
@@ -103,23 +118,54 @@ class IptvAccount extends Model
      */
     public function resolvedChannelGroups()
     {
-        $explicit = $this->channelGroups;
-        $baseQuery = ChannelGroup::active()
-            ->when(! $this->allow_adult, fn (Builder $query) => $query->where('is_adult', false))
-            ->orderBy('sort_order')
-            ->orderBy('name');
+        $sourceId = $this->m3u_source_id;
 
-        if (! $this->has_group_restrictions) {
-            return $baseQuery->get();
-        }
-
-        if ($explicit->isEmpty()) {
+        if (! $sourceId) {
             return ChannelGroup::query()->whereRaw('1 = 0')->get();
         }
 
-        return $explicit
-            ->where('is_active', true)
-            ->when(! $this->allow_adult, fn ($collection) => $collection->where('is_adult', false))
-            ->values();
+        $baseQuery = ChannelGroup::query()
+            ->where('channel_groups.is_active', true)
+            ->when(! $this->allow_adult, fn (Builder $query) => $query->where('channel_groups.is_adult', false))
+            ->whereExists(function ($sub) use ($sourceId) {
+                $sub->selectRaw('1')
+                    ->from('channels')
+                    ->whereColumn('channels.channel_group_id', 'channel_groups.id')
+                    ->where('channels.m3u_source_id', $sourceId)
+                    ->where('channels.is_active', true);
+            })
+            ->orderBy('channel_groups.sort_order')
+            ->orderBy('channel_groups.name');
+
+        $allowedGroupIds = $baseQuery->pluck('channel_groups.id');
+
+        if (! $this->has_group_restrictions) {
+            if ($allowedGroupIds->isEmpty()) {
+                return ChannelGroup::query()->whereRaw('1 = 0')->get();
+            }
+
+            return ChannelGroup::query()
+                ->whereIn('channel_groups.id', $allowedGroupIds)
+                ->orderBy('channel_groups.sort_order')
+                ->orderBy('channel_groups.name')
+                ->get();
+        }
+
+        if ($allowedGroupIds->isEmpty()) {
+            return ChannelGroup::query()->whereRaw('1 = 0')->get();
+        }
+
+        $restricted = $this->channelGroups()
+            ->whereIn('channel_groups.id', $allowedGroupIds)
+            ->orderBy('account_channel_groups.sort_order')
+            ->orderBy('channel_groups.sort_order')
+            ->orderBy('channel_groups.name')
+            ->get();
+
+        if ($restricted->isEmpty()) {
+            return ChannelGroup::query()->whereRaw('1 = 0')->get();
+        }
+
+        return $restricted->values();
     }
 }
