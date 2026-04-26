@@ -30,14 +30,16 @@ class IptvController extends Controller
     /**
      * Called INTERNALLY by Nginx auth_request before proxy_pass-ing a stream.
      *
-     * Nginx passes stream info via FastCGI headers:
-     *   HTTP_X_STREAM_USERNAME, HTTP_X_STREAM_PASSWORD, HTTP_X_STREAM_ID
+     * Nginx passes stream info as query params on the auth_request URI:
+     *   /api/auth/stream?u=username&p=password&id=stream_id
      *
      * Returns:
      *   200 + X-Upstream-* headers  → Nginx proxies the stream to the upstream
      *   401                         → Nginx returns 401 to the client
-     *   403                         → Nginx returns 403 (suspended/expired/max conn)
-     *   404                         → Nginx returns 404 (channel not found)
+     *   403                         → Nginx returns 403 for all denied/unavailable cases
+     *
+     * Nginx auth_request only treats 2xx, 401, and 403 as meaningful responses.
+     * Any other status becomes a 500 on the parent /live/ request.
      */
     public function authStream(Request $request): Response
     {
@@ -73,33 +75,58 @@ class IptvController extends Controller
             ->first();
 
         if (! $channel || ! $channel->is_active) {
-            return response('Channel not found', 404);
+            return response('Forbidden', 403);
         }
 
         // ── 3. Enforce max_connections ────────────────────────────────────────
-        $ip             = $request->ip();
-        $activeSessions = StreamSession::where('account_id', $account->id)
-            ->where('last_seen_at', '>', now()->subSeconds(30))
-            ->where(fn ($q) => $q->where('channel_id', '!=', $channelId)->orWhere('ip_address', '!=', $ip))
-            ->count();
+        // Count distinct OTHER IPs with active sessions.
+        // The same IP can switch channels freely — only different IPs count.
+        // This prevents channel-switching from triggering "max connections".
+        $ip = $request->ip();
 
-        if ($activeSessions >= $account->max_connections) {
-            return response('Max connections', 429);
+        $otherActiveIps = StreamSession::where('account_id', $account->id)
+            ->where('last_seen_at', '>', now()->subSeconds(30))
+            ->where('ip_address', '!=', $ip)
+            ->distinct('ip_address')
+            ->count('ip_address');
+
+        if ($otherActiveIps >= $account->max_connections) {
+            return response('Forbidden', 403);
         }
 
-        // ── 4. Register session ───────────────────────────────────────────────
+        // ── 4. Resolve provider URL BEFORE registering session ────────────────
+        // Must validate the URL first — a ghost session from an empty stream_url
+        // would block max_connections for 30s and prevent other channels from loading.
+        $providerUrl = $channel->stream_url;
+
+        if (empty($providerUrl)) {
+            \Log::warning('authStream: channel has no stream_url', [
+                'channel_id' => $channelId,
+                'username'   => $username,
+            ]);
+            return response('Forbidden', 403);
+        }
+
+        $finalUrl = $this->resolveStreamUrl($providerUrl);
+
+        if (empty($finalUrl)) {
+            \Log::error('authStream: could not resolve stream URL', [
+                'channel_id'   => $channelId,
+                'provider_url' => $providerUrl,
+                'username'     => $username,
+            ]);
+            return response('Forbidden', 403);
+        }
+
+        // ── 5. Register / update session ──────────────────────────────────────
+        // Key on [account_id, ip_address] — one session per IP.
+        // Channel switching updates the same record (no accumulation).
         StreamSession::updateOrCreate(
-            ['account_id' => $account->id, 'channel_id' => $channelId, 'ip_address' => $ip],
-            ['started_at' => now(), 'last_seen_at' => now()],
+            ['account_id' => $account->id, 'ip_address' => $ip],
+            ['channel_id' => $channelId, 'started_at' => now(), 'last_seen_at' => now()],
         );
 
-        // ── 5. Resolve provider URL (follow any 302 redirects) ────────────────
-        // Resolve to the final CDN URL so Nginx proxy_pass goes directly there.
-        $providerUrl = $channel->stream_url;
-        $finalUrl    = $this->resolveStreamUrl($providerUrl);
-
-        // ── 6. Return upstream URL for Nginx proxy_pass ───────────────────────
-        // Nginx reads this via: auth_request_set $upstream_url $upstream_http_x_upstream_url;
+        // ── 6. Return upstream URL for nginx proxy_pass ───────────────────────
         return response('OK', 200, [
             'X-Upstream-URL' => $finalUrl,
             'Content-Type'   => 'text/plain',
@@ -107,11 +134,13 @@ class IptvController extends Controller
     }
 
     /**
-     * Resolve a provider URL by following HTTP redirects.
-     * Uses a short timeout to prevent waiting too long if the stream doesn't redirect.
+     * Resolve a provider URL by following HTTP redirects without waiting for
+     * the full live stream body. As soon as the final non-redirect response
+     * starts sending bytes, we abort the transfer and keep CURLINFO_EFFECTIVE_URL.
      */
     private function resolveStreamUrl(string $url): string
     {
+        $bodyBytes = 0;
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_FOLLOWLOCATION => true,
@@ -119,29 +148,48 @@ class IptvController extends Controller
             CURLOPT_TIMEOUT        => config('iptv.stream.redirect_timeout', 5),
             CURLOPT_CONNECTTIMEOUT => config('iptv.stream.redirect_connect_timeout', 3),
             CURLOPT_USERAGENT      => request()->header('User-Agent') ?? 'VLC/3.0.20 LibVLC/3.0.20',
-            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_RETURNTRANSFER => false,
             CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => false,
             CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4,
-            CURLOPT_RANGE          => '0-0', // Try to only fetch first byte to speed up CDNs
+            CURLOPT_WRITEFUNCTION  => static function ($curl, $data) use (&$bodyBytes): int {
+                $bodyBytes += strlen($data);
+
+                // Stop as soon as the first body chunk arrives. With
+                // CURLOPT_FOLLOWLOCATION enabled, libcurl only calls the write
+                // callback for the final non-redirect response body.
+                return 0;
+            },
+            CURLOPT_HEADERFUNCTION => static fn ($curl, $header): int => strlen($header),
         ]);
 
         $startTime = microtime(true);
         curl_exec($ch);
+        $curlErrorNo = curl_errno($ch);
+        $curlError = curl_error($ch);
         $finalUrl = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $redirectCount = curl_getinfo($ch, CURLINFO_REDIRECT_COUNT);
+        $abortedAfterFirstChunk = $curlErrorNo === CURLE_WRITE_ERROR && $bodyBytes > 0;
         curl_close($ch);
 
         // Log connection diagnostics
         if (config('iptv.logging.connection_diagnostics', false)) {
             \Log::channel(config('iptv.logging.channel', 'stack'))->info('Stream URL resolution', [
-                'original_url' => $url,
-                'final_url' => $finalUrl,
-                'http_code' => $httpCode,
-                'redirect_count' => $redirectCount,
-                'duration_ms' => round((microtime(true) - $startTime) * 1000, 2),
+                'original_url'               => $url,
+                'final_url'                  => $finalUrl,
+                'http_code'                  => $httpCode,
+                'redirect_count'             => $redirectCount,
+                'bytes_before_abort'         => $bodyBytes,
+                'curl_error_no'              => $curlErrorNo,
+                'curl_error'                 => $curlError,
+                'aborted_after_first_chunk'  => $abortedAfterFirstChunk,
+                'duration_ms'                => round((microtime(true) - $startTime) * 1000, 2),
             ]);
+        }
+
+        if ($curlErrorNo !== 0 && ! $abortedAfterFirstChunk && $httpCode === 0) {
+            return '';
         }
 
         return ($finalUrl && $finalUrl !== '') ? $finalUrl : $url;
