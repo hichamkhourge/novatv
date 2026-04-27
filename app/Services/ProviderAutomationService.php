@@ -72,6 +72,10 @@ class ProviderAutomationService
         Log::info('[ProviderAutomationService] Triggering Zazy script via Flask API', [
             'account_id' => $accountId,
             'callback_url' => $callbackUrl,
+            'base_url' => $this->baseUrl,
+            'api_key_length' => strlen($this->apiKey),
+            'api_key_first_10' => substr($this->apiKey, 0, 10),
+            'api_key_last_10' => substr($this->apiKey, -10),
         ]);
 
         try {
@@ -88,6 +92,8 @@ class ProviderAutomationService
                 Log::error('[ProviderAutomationService] Flask API error response', [
                     'status' => $response->status(),
                     'body' => $body,
+                    'sent_api_key_length' => strlen($this->apiKey),
+                    'sent_api_key_first_10' => substr($this->apiKey, 0, 10),
                 ]);
 
                 return [
