@@ -40,8 +40,9 @@ class ProviderAutomationService
     }
 
     /**
-     * Generate a new Zazy account and return Xtream credentials.
+     * Generate a new Zazy account and return Xtream credentials (old synchronous method).
      *
+     * @deprecated Use generateZazyViaScript() instead for async callback-based approach
      * @return array{
      *   success: bool,
      *   xtream_host: string|null,
@@ -55,6 +56,80 @@ class ProviderAutomationService
     public function generateZazy(): array
     {
         return $this->call('POST', '/api/generate/zazy');
+    }
+
+    /**
+     * Trigger Zazy account generation via Python script (async with webhook callback).
+     * The script will POST results back to our webhook endpoint when complete.
+     *
+     * @param int $accountId The IPTV account ID
+     * @return array{success: bool, message: string, error: string|null}
+     */
+    public function generateZazyViaScript(int $accountId): array
+    {
+        $callbackUrl = config('app.url') . '/api/webhooks/zazy-automation';
+
+        Log::info('[ProviderAutomationService] Triggering Zazy script via Flask API', [
+            'account_id' => $accountId,
+            'callback_url' => $callbackUrl,
+        ]);
+
+        try {
+            $response = Http::withToken($this->apiKey)
+                ->timeout(30) // Short timeout - the script runs in background
+                ->post("{$this->baseUrl}/api/generate", [
+                    'user_id' => $accountId,
+                    'callback_url' => $callbackUrl,
+                ]);
+
+            $body = $response->json();
+
+            if (! $response->successful()) {
+                Log::error('[ProviderAutomationService] Flask API error response', [
+                    'status' => $response->status(),
+                    'body' => $body,
+                ]);
+
+                return [
+                    'success' => false,
+                    'message' => 'Failed to trigger automation script',
+                    'error' => $body['error'] ?? "HTTP {$response->status()}",
+                ];
+            }
+
+            Log::info('[ProviderAutomationService] Flask API call succeeded', [
+                'status' => $body['status'] ?? 'unknown',
+                'account_id' => $accountId,
+            ]);
+
+            return [
+                'success' => true,
+                'message' => $body['message'] ?? 'Automation started',
+                'error' => null,
+            ];
+
+        } catch (ConnectionException $e) {
+            Log::error('[ProviderAutomationService] Connection failed to Flask API', [
+                'error' => $e->getMessage()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Could not connect to automation API',
+                'error' => $e->getMessage(),
+            ];
+
+        } catch (\Throwable $e) {
+            Log::error('[ProviderAutomationService] Unexpected error calling Flask API', [
+                'error' => $e->getMessage()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Automation API call failed',
+                'error' => $e->getMessage(),
+            ];
+        }
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

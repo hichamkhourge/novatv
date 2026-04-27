@@ -21,6 +21,13 @@ return Application::configure(basePath: dirname(__DIR__))
             // IPTV client-facing routes — no session, no CSRF, no cookies
             Route::middleware([])
                 ->group(base_path('routes/iptv.php'));
+
+            // Webhook routes — no session, no CSRF
+            Route::prefix('api/webhooks')
+                ->middleware(['api'])
+                ->group(function () {
+                    Route::post('/zazy-automation', [\App\Http\Controllers\ZazyWebhookController::class, 'handleCallback']);
+                });
         },
     )
     ->withMiddleware(function (Middleware $middleware) {
@@ -33,11 +40,12 @@ return Application::configure(basePath: dirname(__DIR__))
                 | Illuminate\Http\Request::HEADER_X_FORWARDED_PROTO,
         );
 
-        // Exclude IPTV endpoints from CSRF verification
+        // Exclude IPTV endpoints and webhooks from CSRF verification
         $middleware->validateCsrfTokens(except: [
             '/get.php',
             '/player_api.php',
             '/live/*',
+            '/api/webhooks/*',
         ]);
     })
     ->withSchedule(function (Schedule $schedule) {

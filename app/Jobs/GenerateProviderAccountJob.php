@@ -18,10 +18,10 @@ class GenerateProviderAccountJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     /**
-     * Allow up to 12 minutes before the job times out.
-     * Selenium + 2captcha can take up to 8–10 minutes.
+     * Short timeout since we're just triggering the script (not waiting for completion).
+     * The actual automation happens in the background via the Flask API.
      */
-    public int $timeout = 720;
+    public int $timeout = 60;
 
     /**
      * Do not retry on failure — each run creates a new Zazy trial account.
@@ -55,16 +55,17 @@ class GenerateProviderAccountJob implements ShouldQueue
             'provider_error'  => null,
         ]);
 
-        // Call the appropriate automation endpoint
+        // Trigger the automation script via Flask API (async approach)
+        // The script will callback to our webhook when complete
         $result = match ($account->provider) {
-            'zazy'  => $automation->generateZazy(),
+            'zazy'  => $automation->generateZazyViaScript($account->id),
             default => ['success' => false, 'error' => "No automation for provider: {$account->provider}"],
         };
 
         if (! ($result['success'] ?? false)) {
             $error = $result['error'] ?? 'Unknown error from automation API';
 
-            Log::error('[GenerateProviderAccountJob] Generation failed', [
+            Log::error('[GenerateProviderAccountJob] Failed to trigger automation', [
                 'account_id' => $account->id,
                 'error'      => $error,
             ]);
@@ -77,65 +78,13 @@ class GenerateProviderAccountJob implements ShouldQueue
             return;
         }
 
-        // ── Upsert the M3uSource with the new Xtream credentials ─────────────
-        $host     = $result['xtream_host'] ?? null;
-        $username = $result['xtream_username'];
-        $password = $result['xtream_password'];
-
-        // Default host to the known Zazy host if the script didn't extract it
-        if (! $host && $account->provider === 'zazy') {
-            $host = config('services.providers.zazy_host', 'http://live.zazytv.com');
-        }
-
-        $sourceName = ucfirst($account->provider) . ' — ' . $account->username;
-
-        if ($account->m3u_source_id) {
-            // Update existing source
-            $source = M3uSource::find($account->m3u_source_id);
-            if ($source) {
-                $source->update([
-                    'xtream_host'     => $host,
-                    'xtream_username' => $username,
-                    'xtream_password' => $password,
-                    'status'          => 'idle',
-                    'error_message'   => null,
-                ]);
-
-                Log::info('[GenerateProviderAccountJob] Updated existing M3uSource', ['source_id' => $source->id]);
-            }
-        } else {
-            // Create a brand-new Xtream source and link it to the account
-            $source = M3uSource::create([
-                'name'             => $sourceName,
-                'source_type'      => 'xtream',
-                'xtream_host'      => $host,
-                'xtream_username'  => $username,
-                'xtream_password'  => $password,
-                'xtream_stream_types' => ['live'],
-                'status'           => 'idle',
-                'is_active'        => true,
-                'channels_count'   => 0,
-            ]);
-
-            $account->update(['m3u_source_id' => $source->id]);
-
-            Log::info('[GenerateProviderAccountJob] Created new M3uSource', ['source_id' => $source->id]);
-        }
-
-        // Mark account as done and record sync time
-        $account->update([
-            'provider_status'    => 'done',
-            'provider_error'     => null,
-            'provider_synced_at' => now(),
-        ]);
-
-        // Kick off channel import now that we have fresh credentials
-        ImportXtreamJob::dispatch($source->id);
-
-        Log::info('[GenerateProviderAccountJob] Completed successfully', [
+        // Script triggered successfully - it will callback when complete
+        Log::info('[GenerateProviderAccountJob] Automation script triggered successfully', [
             'account_id' => $account->id,
-            'source_id'  => $source->id,
+            'message'    => $result['message'] ?? 'Started',
         ]);
+
+        // Account remains in 'pending' status until webhook updates it
     }
 
     /**
