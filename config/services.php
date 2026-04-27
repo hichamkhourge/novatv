@@ -36,10 +36,10 @@ return [
     ],
 
     // ── Provider Automation API ───────────────────────────────────────────────
-    // The zazy-automation container exposes a Flask API on port 5000.
+    // The zazy-automation container exposes a Flask API on port 8899.
     // Both containers must be on dokploy-network.
     'automation_api' => [
-        'url' => env('AUTOMATION_API_URL', 'http://zazy-automation:5000'),
+        'url' => env('AUTOMATION_API_URL', 'http://zazy-automation:8899'),
         'key' => env('AUTOMATION_API_KEY', ''),
     ],
 
