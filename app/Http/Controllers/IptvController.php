@@ -514,7 +514,7 @@ class IptvController extends Controller
         string $username,
         string $password,
         string $streamId
-    ): \Illuminate\Http\Response|\Symfony\Component\HttpFoundation\StreamedResponse {
+    ): \Illuminate\Http\Response|\Illuminate\Http\RedirectResponse|\Symfony\Component\HttpFoundation\StreamedResponse {
         $account = IptvAccount::where('username', $username)
             ->where('password', $password)
             ->first();
@@ -658,7 +658,7 @@ class IptvController extends Controller
         string $username,
         string $password,
         string $streamId
-    ): \Illuminate\Http\Response|\Symfony\Component\HttpFoundation\StreamedResponse {
+    ): \Illuminate\Http\Response|\Illuminate\Http\RedirectResponse|\Symfony\Component\HttpFoundation\StreamedResponse {
         // ── 1. Authenticate ──────────────────────────────────────────────────
         $account = IptvAccount::where('username', $username)
             ->where('password', $password)
