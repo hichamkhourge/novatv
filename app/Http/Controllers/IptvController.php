@@ -784,7 +784,16 @@ class IptvController extends Controller
             curl_multi_remove_handle($mh, $ch);
             curl_multi_close($mh);
             curl_close($ch);
-            $session->delete();
+            $fallbackRedirect = $this->shouldFallbackToDirectUpstream(
+                $providerConfig,
+                $firstChunk,
+                $upstreamUrl,
+            );
+
+            if (! $fallbackRedirect) {
+                $session->delete();
+            }
+
             if ($cookieFile) {
                 @unlink($cookieFile);
             }
@@ -799,6 +808,20 @@ class IptvController extends Controller
                 'username'         => $username,
                 'response_preview' => substr($firstChunk, 0, 200),
             ]);
+
+            if ($fallbackRedirect) {
+                \Log::warning('Stream upstream failed, redirecting client to provider URL', [
+                    'channel_id'       => $channelId,
+                    'upstream_url'     => $upstreamUrl,
+                    'provider'         => $providerConfig['provider_name'],
+                    'username'         => $username,
+                    'response_preview' => substr($firstChunk, 0, 200),
+                ]);
+
+                return redirect()->away($upstreamUrl, 302, [
+                    'Cache-Control' => 'no-cache, no-store, must-revalidate',
+                ]);
+            }
 
             return response('Upstream unavailable', 503, ['Content-Type' => 'text/plain']);
         }
@@ -1006,6 +1029,37 @@ class IptvController extends Controller
             : '';
 
         return "/_proxy_stream/{$scheme}/{$host}{$port}{$path}{$query}";
+    }
+
+    private function shouldFallbackToDirectUpstream(array $providerConfig, string $firstChunk, string $upstreamUrl): bool
+    {
+        if (($providerConfig['provider_name'] ?? 'generic') !== 'zazy') {
+            return false;
+        }
+
+        if ($upstreamUrl === '') {
+            return false;
+        }
+
+        if (! config('iptv.providers.zazy.upstream_error_redirect_fallback.enabled', true)) {
+            return false;
+        }
+
+        $normalizedChunk = strtolower(trim($firstChunk));
+
+        if ($normalizedChunk === '') {
+            return false;
+        }
+
+        $patterns = config('iptv.providers.zazy.upstream_error_redirect_fallback.body_patterns', []);
+
+        foreach ($patterns as $pattern) {
+            if ($pattern !== '' && str_contains($normalizedChunk, strtolower((string) $pattern))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function logAccess(Request $request, IptvAccount $account, string $action, string $status): void

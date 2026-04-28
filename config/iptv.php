@@ -102,6 +102,14 @@ return [
                 'max_redirects' => 15,
                 'follow_location' => true,
             ],
+
+            'upstream_error_redirect_fallback' => [
+                'enabled' => env('ZAZY_UPSTREAM_ERROR_REDIRECT_FALLBACK', true),
+                'body_patterns' => [
+                    'error code: 520',
+                    'error code: 522',
+                ],
+            ],
         ],
     ],
 
