@@ -44,6 +44,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->validateCsrfTokens(except: [
             '/get.php',
             '/player_api.php',
+            '/panel_api.php',
             '/live/*',
             '/api/webhooks/*',
         ]);
