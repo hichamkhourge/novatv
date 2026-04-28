@@ -25,6 +25,10 @@ Route::match(['get', 'post'], '/player_api.php', [IptvController::class, 'player
     ->middleware(IptvAuthMiddleware::class)
     ->name('iptv.player_api');
 
+Route::match(['get', 'post'], '/panel_api.php', [IptvController::class, 'playerApi'])
+    ->middleware(IptvAuthMiddleware::class)
+    ->name('iptv.panel_api');
+
 // Stream proxy — PHP handles auth, sessions, and MPEGTS pre-buffering
 Route::get('/live/{username}/{password}/{stream_id}', [IptvController::class, 'streamProxy'])
     ->where('stream_id', '.+')

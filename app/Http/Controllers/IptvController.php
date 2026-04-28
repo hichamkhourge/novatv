@@ -361,10 +361,12 @@ class IptvController extends Controller
         return match ($action) {
             'get_live_categories'   => $this->getLiveCategories($account),
             'get_live_streams'      => $this->getLiveStreams($account, $request),
+            'get_account_info'      => $this->getAccountInfo($account, $request),
             'get_vod_categories'    => response()->json([]),
             'get_vod_streams'       => response()->json([]),
             'get_series_categories' => response()->json([]),
             'get_series'            => response()->json([]),
+            'get_epg'               => response()->json([]),
             'get_short_epg'         => response()->json([]),
             default                 => $this->getAccountInfo($account, $request),
         };
@@ -377,17 +379,22 @@ class IptvController extends Controller
     {
         $host   = $request->getHost();
         $scheme = $request->getScheme();
+        $activeConnections = (string) $account->streamSessions()
+            ->where('last_seen_at', '>', now()->subSeconds(30))
+            ->count();
+        $createdAt = (string) ($account->created_at?->timestamp ?? 0);
 
         return response()->json([
             'user_info' => [
                 'username'               => $account->username,
                 'password'               => $account->password,
-                'status'                 => $account->status,
-                'exp_date'               => $account->expires_at?->timestamp,
+                'message'                => 'Login successful',
+                'auth'                   => 1,
+                'status'                 => $this->mapXtreamStatus($account->status),
+                'exp_date'               => (string) ($account->expires_at?->timestamp ?? 0),
+                'created_at'             => $createdAt,
                 'is_trial'               => '0',
-                'active_cons'            => (string) $account->streamSessions()
-                    ->where('last_seen_at', '>', now()->subSeconds(30))
-                    ->count(),
+                'active_cons'            => $activeConnections,
                 'max_connections'        => (string) $account->max_connections,
                 'allowed_output_formats' => ['ts', 'm3u8'],
             ],
@@ -443,7 +450,7 @@ class IptvController extends Controller
             ->map(fn (ChannelGroup $g) => [
                 'category_id'   => (string) $g->id,
                 'category_name' => $g->name,
-                'parent_id'     => 0,
+                'parent_id'     => '0',
             ])
             ->values();
 
@@ -1015,5 +1022,15 @@ class IptvController extends Controller
         } catch (\Throwable) {
             // Never fail a stream request due to logging
         }
+    }
+
+    private function mapXtreamStatus(?string $status): string
+    {
+        return match (strtolower((string) $status)) {
+            'active' => 'Active',
+            'expired' => 'Expired',
+            'suspended' => 'Disabled',
+            default => 'Disabled',
+        };
     }
 }
