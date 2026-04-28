@@ -8,7 +8,9 @@ use App\Jobs\GenerateProviderAccountJob;
 use App\Models\IptvAccount;
 use App\Models\M3uSource;
 use Carbon\Carbon;
+use Carbon\CarbonInterface;
 use Filament\Forms;
+use Filament\Forms\Get;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
@@ -17,6 +19,13 @@ use Filament\Tables\Table;
 
 class IptvAccountResource extends Resource
 {
+    public const EXPIRY_PRESET_1_DAY = '1_day';
+    public const EXPIRY_PRESET_1_MONTH = '1_month';
+    public const EXPIRY_PRESET_3_MONTHS = '3_months';
+    public const EXPIRY_PRESET_6_MONTHS = '6_months';
+    public const EXPIRY_PRESET_1_YEAR = '1_year';
+    public const EXPIRY_PRESET_CUSTOM = 'custom';
+
     protected static ?string $model = IptvAccount::class;
     protected static ?string $navigationIcon  = 'heroicon-o-user-group';
     protected static ?string $navigationLabel = 'IPTV Accounts';
@@ -83,7 +92,9 @@ class IptvAccountResource extends Resource
                     ->relationship('m3uSource', 'name')
                     ->searchable()
                     ->preload()
-                    ->required()
+                    ->required(fn (Get $get) => $get('provider') === 'manual')
+                    ->dehydrated(fn (Get $get) => $get('provider') === 'manual')
+                    ->visible(fn (Get $get) => $get('provider') === 'manual')
                     ->createOptionForm([
                         Forms\Components\TextInput::make('name')
                             ->label('Source Name')
@@ -130,6 +141,11 @@ class IptvAccountResource extends Resource
                         return $source->id;
                     })
                     ->helperText('Channels served to this client come from this M3U source'),
+
+                Forms\Components\Placeholder::make('zazy_source_info')
+                    ->label('Linked M3U Source')
+                    ->content('A new source will be created automatically for this Zazy account after the script returns the provider username and password.')
+                    ->visible(fn (Get $get) => $get('provider') === 'zazy'),
             ])->columns(1),
 
             Forms\Components\Section::make('Subscription')->schema([
@@ -149,10 +165,19 @@ class IptvAccountResource extends Resource
                     ->minValue(1)
                     ->maxValue(100),
 
-                Forms\Components\DateTimePicker::make('expires_at')
+                Forms\Components\Select::make('expires_at_preset')
                     ->label('Expires At')
-                    ->nullable()
-                    ->seconds(false),
+                    ->options(static::expiryPresetOptions())
+                    ->default(static::EXPIRY_PRESET_1_DAY)
+                    ->live()
+                    ->dehydrated(false),
+
+                Forms\Components\DatePicker::make('expires_at_custom_date')
+                    ->label('Custom Expiry Date')
+                    ->native(false)
+                    ->visible(fn (Get $get) => $get('expires_at_preset') === static::EXPIRY_PRESET_CUSTOM)
+                    ->required(fn (Get $get) => $get('expires_at_preset') === static::EXPIRY_PRESET_CUSTOM)
+                    ->dehydrated(false),
 
                 Forms\Components\Toggle::make('allow_adult')
                     ->label('Enable Adult Groups')
@@ -328,5 +353,81 @@ class IptvAccountResource extends Resource
             'create' => Pages\CreateIptvAccount::route('/create'),
             'edit'   => Pages\EditIptvAccount::route('/{record}/edit'),
         ];
+    }
+
+    public static function expiryPresetOptions(): array
+    {
+        return [
+            static::EXPIRY_PRESET_1_DAY => '1 day (test)',
+            static::EXPIRY_PRESET_1_MONTH => '1 month',
+            static::EXPIRY_PRESET_3_MONTHS => '3 months',
+            static::EXPIRY_PRESET_6_MONTHS => '6 months',
+            static::EXPIRY_PRESET_1_YEAR => '1 year',
+            static::EXPIRY_PRESET_CUSTOM => 'Custom',
+        ];
+    }
+
+    public static function hydrateExpiryFormData(array $data): array
+    {
+        $expiresAt = isset($data['expires_at']) && $data['expires_at']
+            ? Carbon::parse($data['expires_at'])
+            : null;
+
+        $data['expires_at_preset'] = static::inferExpiryPreset($expiresAt);
+        $data['expires_at_custom_date'] = $data['expires_at_preset'] === static::EXPIRY_PRESET_CUSTOM && $expiresAt
+            ? $expiresAt->toDateString()
+            : null;
+
+        return $data;
+    }
+
+    public static function applyExpiryFormData(array $data): array
+    {
+        $data['expires_at'] = static::resolveExpiryFromFormData($data);
+
+        unset($data['expires_at_preset'], $data['expires_at_custom_date']);
+
+        return $data;
+    }
+
+    public static function resolveExpiryFromFormData(array $data): ?Carbon
+    {
+        $preset = $data['expires_at_preset'] ?? static::EXPIRY_PRESET_1_DAY;
+
+        return match ($preset) {
+            static::EXPIRY_PRESET_1_DAY => Carbon::now()->addDay()->endOfDay(),
+            static::EXPIRY_PRESET_1_MONTH => Carbon::now()->addMonth()->endOfDay(),
+            static::EXPIRY_PRESET_3_MONTHS => Carbon::now()->addMonths(3)->endOfDay(),
+            static::EXPIRY_PRESET_6_MONTHS => Carbon::now()->addMonths(6)->endOfDay(),
+            static::EXPIRY_PRESET_1_YEAR => Carbon::now()->addYear()->endOfDay(),
+            static::EXPIRY_PRESET_CUSTOM => ! empty($data['expires_at_custom_date'])
+                ? Carbon::parse($data['expires_at_custom_date'])->endOfDay()
+                : null,
+            default => null,
+        };
+    }
+
+    public static function inferExpiryPreset(?CarbonInterface $expiresAt): string
+    {
+        if (! $expiresAt) {
+            return static::EXPIRY_PRESET_1_DAY;
+        }
+
+        $normalized = Carbon::instance($expiresAt instanceof Carbon ? $expiresAt : Carbon::parse($expiresAt))->endOfDay();
+        $now = Carbon::now();
+
+        foreach ([
+            static::EXPIRY_PRESET_1_DAY => $now->copy()->addDay()->endOfDay(),
+            static::EXPIRY_PRESET_1_MONTH => $now->copy()->addMonth()->endOfDay(),
+            static::EXPIRY_PRESET_3_MONTHS => $now->copy()->addMonths(3)->endOfDay(),
+            static::EXPIRY_PRESET_6_MONTHS => $now->copy()->addMonths(6)->endOfDay(),
+            static::EXPIRY_PRESET_1_YEAR => $now->copy()->addYear()->endOfDay(),
+        ] as $preset => $expected) {
+            if ($normalized->equalTo($expected)) {
+                return $preset;
+            }
+        }
+
+        return static::EXPIRY_PRESET_CUSTOM;
     }
 }

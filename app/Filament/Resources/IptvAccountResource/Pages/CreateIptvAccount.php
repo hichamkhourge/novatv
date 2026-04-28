@@ -11,6 +11,15 @@ class CreateIptvAccount extends CreateRecord
 {
     protected static string $resource = IptvAccountResource::class;
 
+    protected function mutateFormDataBeforeCreate(array $data): array
+    {
+        if (($data['provider'] ?? 'manual') !== 'manual') {
+            $data['m3u_source_id'] = null;
+        }
+
+        return IptvAccountResource::applyExpiryFormData($data);
+    }
+
     protected function afterCreate(): void
     {
         $account = $this->record;

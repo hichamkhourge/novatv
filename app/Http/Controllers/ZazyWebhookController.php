@@ -112,21 +112,18 @@ class ZazyWebhookController extends Controller
             'username' => $data['username']
         ]);
 
-        // Create or update M3U source with Xtream credentials
-        $m3uSource = M3uSource::updateOrCreate(
-            ['id' => $account->m3u_source_id],
-            [
-                'name' => "Zazy - {$account->username}",
-                'source_type' => 'xtream',
-                'xtream_host' => $data['host'],
-                'xtream_username' => $data['username'],
-                'xtream_password' => $data['password'],
-                'xtream_stream_types' => ['live', 'movie', 'series'],
-                'status' => 'active',
-                'is_active' => true,
-                'excluded_groups' => ['24/7'], // Exclude VOD groups
-            ]
-        );
+        // Create a fresh M3U source per Zazy account from the returned credentials.
+        $m3uSource = M3uSource::create([
+            'name' => "Zazy - {$account->username}",
+            'source_type' => 'xtream',
+            'xtream_host' => $data['host'],
+            'xtream_username' => $data['username'],
+            'xtream_password' => $data['password'],
+            'xtream_stream_types' => ['live', 'movie', 'series'],
+            'status' => 'active',
+            'is_active' => true,
+            'excluded_groups' => ['24/7'], // Exclude VOD groups
+        ]);
 
         Log::info('M3U source created/updated', [
             'source_id' => $m3uSource->id,
@@ -147,7 +144,7 @@ class ZazyWebhookController extends Controller
         ]);
 
         // Dispatch job to import channels from Xtream API
-        ImportXtreamJob::dispatch($m3uSource);
+        ImportXtreamJob::dispatch($m3uSource->id);
 
         Log::info('ImportXtreamJob dispatched', [
             'source_id' => $m3uSource->id,

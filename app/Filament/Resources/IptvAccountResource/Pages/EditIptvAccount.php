@@ -10,6 +10,16 @@ class EditIptvAccount extends EditRecord
 {
     protected static string $resource = IptvAccountResource::class;
 
+    protected function mutateFormDataBeforeFill(array $data): array
+    {
+        return IptvAccountResource::hydrateExpiryFormData($data);
+    }
+
+    protected function mutateFormDataBeforeSave(array $data): array
+    {
+        return IptvAccountResource::applyExpiryFormData($data);
+    }
+
     protected function getHeaderActions(): array
     {
         return [Actions\DeleteAction::make()];
