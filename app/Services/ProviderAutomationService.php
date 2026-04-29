@@ -138,6 +138,184 @@ class ProviderAutomationService
         }
     }
 
+    /**
+     * Trigger Ugeen account generation via Python script (async with webhook callback).
+     * The script will POST results back to our webhook endpoint when complete.
+     *
+     * @param int $accountId The IPTV account ID
+     * @param string|null $username Provider username (optional, falls back to env)
+     * @param string|null $password Provider password (optional, falls back to env)
+     * @return array{success: bool, message: string, error: string|null}
+     */
+    public function generateUgeenViaScript(int $accountId, ?string $username = null, ?string $password = null): array
+    {
+        $callbackUrl = config('app.url') . '/api/webhooks/ugeen-automation';
+
+        Log::info('[ProviderAutomationService] Triggering Ugeen script via Flask API', [
+            'account_id' => $accountId,
+            'callback_url' => $callbackUrl,
+            'has_custom_credentials' => !empty($username),
+        ]);
+
+        try {
+            $payload = [
+                'user_id' => $accountId,
+                'callback_url' => $callbackUrl,
+            ];
+
+            // Add custom credentials if provided
+            if (!empty($username) && !empty($password)) {
+                $payload['username'] = $username;
+                $payload['password'] = $password;
+            }
+
+            $response = Http::withToken($this->apiKey)
+                ->timeout(30) // Short timeout - the script runs in background
+                ->post("{$this->baseUrl}/api/generate/ugeen", $payload);
+
+            $body = $response->json();
+
+            if (! $response->successful()) {
+                Log::error('[ProviderAutomationService] Flask API error response for Ugeen', [
+                    'status' => $response->status(),
+                    'body' => $body,
+                ]);
+
+                return [
+                    'success' => false,
+                    'message' => 'Failed to trigger Ugeen automation script',
+                    'error' => $body['error'] ?? "HTTP {$response->status()}",
+                ];
+            }
+
+            Log::info('[ProviderAutomationService] Ugeen Flask API call succeeded', [
+                'status' => $body['status'] ?? 'unknown',
+                'account_id' => $accountId,
+            ]);
+
+            return [
+                'success' => true,
+                'message' => $body['message'] ?? 'Ugeen automation started',
+                'error' => null,
+            ];
+
+        } catch (ConnectionException $e) {
+            Log::error('[ProviderAutomationService] Connection failed to Flask API for Ugeen', [
+                'error' => $e->getMessage()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Could not connect to automation API',
+                'error' => $e->getMessage(),
+            ];
+
+        } catch (\Throwable $e) {
+            Log::error('[ProviderAutomationService] Unexpected error calling Flask API for Ugeen', [
+                'error' => $e->getMessage()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Ugeen automation API call failed',
+                'error' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Trigger Ugeen account renewal via Python script (async with webhook callback).
+     * The script will POST results back to our webhook endpoint when complete.
+     *
+     * @param int $accountId The IPTV account ID
+     * @param string|null $username Provider username (from m3u_source)
+     * @param string|null $password Provider password (from m3u_source)
+     * @param string|null $packageId Package ID for renewal (from provider_config)
+     * @return array{success: bool, message: string, error: string|null}
+     */
+    public function renewUgeenViaScript(int $accountId, ?string $username = null, ?string $password = null, ?string $packageId = null): array
+    {
+        $callbackUrl = config('app.url') . '/api/webhooks/ugeen-automation';
+
+        Log::info('[ProviderAutomationService] Triggering Ugeen renewal script via Flask API', [
+            'account_id' => $accountId,
+            'callback_url' => $callbackUrl,
+            'has_custom_credentials' => !empty($username),
+            'package_id' => $packageId,
+        ]);
+
+        try {
+            $payload = [
+                'user_id' => $accountId,
+                'callback_url' => $callbackUrl,
+                'is_renewal' => true,
+            ];
+
+            // Add custom credentials if provided
+            if (!empty($username) && !empty($password)) {
+                $payload['username'] = $username;
+                $payload['password'] = $password;
+            }
+
+            // Add package ID if provided
+            if (!empty($packageId)) {
+                $payload['package_id'] = $packageId;
+            }
+
+            $response = Http::withToken($this->apiKey)
+                ->timeout(30) // Short timeout - the script runs in background
+                ->post("{$this->baseUrl}/api/renew/ugeen", $payload);
+
+            $body = $response->json();
+
+            if (! $response->successful()) {
+                Log::error('[ProviderAutomationService] Flask API error response for Ugeen renewal', [
+                    'status' => $response->status(),
+                    'body' => $body,
+                ]);
+
+                return [
+                    'success' => false,
+                    'message' => 'Failed to trigger Ugeen renewal script',
+                    'error' => $body['error'] ?? "HTTP {$response->status()}",
+                ];
+            }
+
+            Log::info('[ProviderAutomationService] Ugeen renewal Flask API call succeeded', [
+                'status' => $body['status'] ?? 'unknown',
+                'account_id' => $accountId,
+            ]);
+
+            return [
+                'success' => true,
+                'message' => $body['message'] ?? 'Ugeen renewal started',
+                'error' => null,
+            ];
+
+        } catch (ConnectionException $e) {
+            Log::error('[ProviderAutomationService] Connection failed to Flask API for Ugeen renewal', [
+                'error' => $e->getMessage()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Could not connect to automation API',
+                'error' => $e->getMessage(),
+            ];
+
+        } catch (\Throwable $e) {
+            Log::error('[ProviderAutomationService] Unexpected error calling Flask API for Ugeen renewal', [
+                'error' => $e->getMessage()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Ugeen renewal API call failed',
+                'error' => $e->getMessage(),
+            ];
+        }
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private function call(string $method, string $path): array

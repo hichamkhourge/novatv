@@ -42,6 +42,7 @@ class IptvAccountResource extends Resource
                     ->options([
                         'manual' => '✋ Manual (enter credentials yourself)',
                         'zazy'   => '🤖 Zazy TV (auto-generate via Selenium)',
+                        'ugeen'  => '🤖 Ugeen (auto-generate via Selenium)',
                     ])
                     ->default('manual')
                     ->required()

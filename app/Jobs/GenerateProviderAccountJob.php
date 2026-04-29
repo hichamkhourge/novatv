@@ -59,6 +59,7 @@ class GenerateProviderAccountJob implements ShouldQueue
         // The script will callback to our webhook when complete
         $result = match ($account->provider) {
             'zazy'  => $automation->generateZazyViaScript($account->id),
+            'ugeen' => $this->handleUgeenAutomation($account, $automation),
             default => ['success' => false, 'error' => "No automation for provider: {$account->provider}"],
         };
 
@@ -85,6 +86,43 @@ class GenerateProviderAccountJob implements ShouldQueue
         ]);
 
         // Account remains in 'pending' status until webhook updates it
+    }
+
+    /**
+     * Handle Ugeen automation (both new accounts and renewals).
+     */
+    protected function handleUgeenAutomation(IptvAccount $account, ProviderAutomationService $automation): array
+    {
+        // Get provider credentials from M3uSource if available
+        $username = null;
+        $password = null;
+        $packageId = null;
+
+        if ($account->m3u_source_id) {
+            $source = M3uSource::find($account->m3u_source_id);
+            if ($source) {
+                $username = $source->provider_username;
+                $password = $source->provider_password;
+                $packageId = $source->provider_config['package_id'] ?? null;
+            }
+        }
+
+        // For renewals, use the renewal script
+        if ($this->isRenewal) {
+            return $automation->renewUgeenViaScript(
+                $account->id,
+                $username,
+                $password,
+                $packageId
+            );
+        }
+
+        // For new accounts, use the generation script
+        return $automation->generateUgeenViaScript(
+            $account->id,
+            $username,
+            $password
+        );
     }
 
     /**

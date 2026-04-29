@@ -21,6 +21,11 @@ class M3uSource extends Model
         'xtream_stream_types',
         // Shared options
         'excluded_groups',
+        // Provider automation fields
+        'provider_type',
+        'provider_username',
+        'provider_password',
+        'provider_config',
         // Status
         'status',
         'is_active',
@@ -34,6 +39,9 @@ class M3uSource extends Model
         'last_synced_at'      => 'datetime',
         'xtream_stream_types' => 'array',
         'excluded_groups'     => 'array',
+        'provider_username'   => 'encrypted',
+        'provider_password'   => 'encrypted',
+        'provider_config'     => 'array',
     ];
 
     protected $attributes = [

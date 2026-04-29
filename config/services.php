@@ -48,9 +48,21 @@ return [
         'webhook_token' => env('ZAZY_WEBHOOK_TOKEN', ''),
     ],
 
+    // ── Ugeen Automation Configuration ────────────────────────────────────────
+    'ugeen_automation' => [
+        'webhook_token' => env('UGEEN_WEBHOOK_TOKEN', ''),
+    ],
+
+    // ── Telegram Notifications ────────────────────────────────────────────────
+    'telegram' => [
+        'bot_token' => env('TELEGRAM_BOT_TOKEN', ''),
+        'chat_id' => env('TELEGRAM_CHAT_ID', ''),
+    ],
+
     // ── Default provider hosts ────────────────────────────────────────────────
     'providers' => [
         'zazy_host' => env('ZAZY_HOST', 'http://live.zazytv.com'),
+        'ugeen_host' => env('UGEEN_HOST', 'http://ugeen.live'),
     ],
 
 ];
