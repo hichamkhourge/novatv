@@ -284,19 +284,29 @@ class IptvAccountResource extends Resource
                     ->searchable()
                     ->sortable()
                     ->badge()
-                    ->color(fn ($record) => $record->m3uSource ? match ($record->m3uSource->source_type) {
-                        'xtream' => 'success',
-                        'url'    => 'info',
-                        'file'   => 'warning',
-                        default  => 'gray',
-                    } : 'gray')
-                    ->formatStateUsing(fn ($record) => $record->m3uSource ? match ($record->m3uSource->source_type) {
-                        'xtream' => "⚡ {$record->m3uSource->name}",
-                        'url'    => "🔗 {$record->m3uSource->name}",
-                        'file'   => "📁 {$record->m3uSource->name}",
-                        default  => $record->m3uSource->name,
-                    } : '— no source —')
-                    ->url(fn ($record) => $record->m3uSource ? route('filament.admin.resources.sources.edit', $record->m3uSource) : null)
+                    ->color(function ($record) {
+                        if (!$record->m3uSource) {
+                            return 'gray';
+                        }
+                        return match ($record->m3uSource->source_type) {
+                            'xtream' => 'success',
+                            'url'    => 'info',
+                            'file'   => 'warning',
+                            default  => 'gray',
+                        };
+                    })
+                    ->formatStateUsing(function ($state, $record) {
+                        if (!$record->m3uSource) {
+                            return '— no source —';
+                        }
+                        return match ($record->m3uSource->source_type) {
+                            'xtream' => "⚡ {$record->m3uSource->name}",
+                            'url'    => "🔗 {$record->m3uSource->name}",
+                            'file'   => "📁 {$record->m3uSource->name}",
+                            default  => $record->m3uSource->name,
+                        };
+                    })
+                    ->url(fn ($record) => $record->m3uSource ? route('filament.admin.resources.m3u-sources.edit', ['record' => $record->m3uSource]) : null)
                     ->openUrlInNewTab()
                     ->placeholder('— no source —'),
 
