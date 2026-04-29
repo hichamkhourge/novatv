@@ -95,6 +95,13 @@ class IptvAccountResource extends Resource
                     ->required(fn (Get $get) => $get('provider') === 'manual')
                     ->dehydrated(fn (Get $get) => $get('provider') === 'manual')
                     ->visible(fn (Get $get) => $get('provider') === 'manual')
+                    ->live()
+                    ->getOptionLabelFromRecordUsing(fn (M3uSource $record) => match ($record->source_type) {
+                        'xtream' => "⚡ {$record->name}",
+                        'url'    => "🔗 {$record->name}",
+                        'file'   => "📁 {$record->name}",
+                        default  => $record->name,
+                    })
                     ->createOptionForm([
                         Forms\Components\TextInput::make('name')
                             ->label('Source Name')
@@ -141,6 +148,76 @@ class IptvAccountResource extends Resource
                         return $source->id;
                     })
                     ->helperText('Channels served to this client come from this M3U source'),
+
+                Forms\Components\Placeholder::make('source_details')
+                    ->label('')
+                    ->content(function (Get $get, $record) {
+                        $sourceId = $get('m3u_source_id');
+                        if (! $sourceId) {
+                            return null;
+                        }
+
+                        $source = M3uSource::find($sourceId);
+                        if (! $source) {
+                            return null;
+                        }
+
+                        $typeIcon = match ($source->source_type) {
+                            'xtream' => '⚡',
+                            'url'    => '🔗',
+                            'file'   => '📁',
+                            default  => '📺',
+                        };
+
+                        $statusColor = match ($source->status) {
+                            'idle'    => '🟢',
+                            'syncing' => '🟡',
+                            'error'   => '🔴',
+                            default   => '⚪',
+                        };
+
+                        $activeStatus = $source->is_active ? '✅ Active' : '❌ Inactive';
+                        $lastSync = $source->last_synced_at ? $source->last_synced_at->diffForHumans() : 'Never synced';
+                        $channelsCount = number_format($source->channels_count);
+                        $accountsCount = $source->iptvAccounts()->count();
+
+                        return new \Illuminate\Support\HtmlString("
+                            <div style='background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-top: 8px;'>
+                                <div style='display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;'>
+                                    <div>
+                                        <strong style='color: #6b7280; font-size: 12px;'>TYPE</strong><br>
+                                        <span style='font-size: 14px;'>{$typeIcon} " . strtoupper($source->source_type) . "</span>
+                                    </div>
+                                    <div>
+                                        <strong style='color: #6b7280; font-size: 12px;'>STATUS</strong><br>
+                                        <span style='font-size: 14px;'>{$statusColor} " . ucfirst($source->status) . "</span>
+                                    </div>
+                                    <div>
+                                        <strong style='color: #6b7280; font-size: 12px;'>CHANNELS</strong><br>
+                                        <span style='font-size: 14px;'>📺 {$channelsCount}</span>
+                                    </div>
+                                    <div>
+                                        <strong style='color: #6b7280; font-size: 12px;'>ACCOUNTS USING THIS</strong><br>
+                                        <span style='font-size: 14px;'>👥 {$accountsCount}</span>
+                                    </div>
+                                    <div>
+                                        <strong style='color: #6b7280; font-size: 12px;'>ACTIVE</strong><br>
+                                        <span style='font-size: 14px;'>{$activeStatus}</span>
+                                    </div>
+                                    <div>
+                                        <strong style='color: #6b7280; font-size: 12px;'>LAST SYNC</strong><br>
+                                        <span style='font-size: 14px;'>🔄 {$lastSync}</span>
+                                    </div>
+                                </div>
+                                <div style='margin-top: 12px; padding-top: 12px; border-top: 1px solid #e5e7eb;'>
+                                    <a href='/admin/sources/{$source->id}/edit' target='_blank' style='color: #3b82f6; text-decoration: none; font-size: 13px;'>
+                                        🔗 View Source Details →
+                                    </a>
+                                </div>
+                            </div>
+                        ");
+                    })
+                    ->visible(fn (Get $get) => $get('provider') === 'manual' && $get('m3u_source_id')),
 
                 Forms\Components\Placeholder::make('zazy_source_info')
                     ->label('Linked M3U Source')
@@ -207,7 +284,20 @@ class IptvAccountResource extends Resource
                     ->searchable()
                     ->sortable()
                     ->badge()
-                    ->color('info')
+                    ->color(fn ($record) => $record->m3uSource ? match ($record->m3uSource->source_type) {
+                        'xtream' => 'success',
+                        'url'    => 'info',
+                        'file'   => 'warning',
+                        default  => 'gray',
+                    } : 'gray')
+                    ->formatStateUsing(fn ($record) => $record->m3uSource ? match ($record->m3uSource->source_type) {
+                        'xtream' => "⚡ {$record->m3uSource->name}",
+                        'url'    => "🔗 {$record->m3uSource->name}",
+                        'file'   => "📁 {$record->m3uSource->name}",
+                        default  => $record->m3uSource->name,
+                    } : '— no source —')
+                    ->url(fn ($record) => $record->m3uSource ? route('filament.admin.resources.sources.edit', $record->m3uSource) : null)
+                    ->openUrlInNewTab()
                     ->placeholder('— no source —'),
 
                 Tables\Columns\TextColumn::make('provider')
@@ -269,11 +359,25 @@ class IptvAccountResource extends Resource
             ])
 
             ->filters([
+                Tables\Filters\SelectFilter::make('m3u_source_id')
+                    ->label('M3U Source')
+                    ->relationship('m3uSource', 'name')
+                    ->searchable()
+                    ->preload()
+                    ->multiple(),
+
                 Tables\Filters\SelectFilter::make('status')
                     ->options([
                         'active'    => 'Active',
                         'suspended' => 'Suspended',
                         'expired'   => 'Expired',
+                    ]),
+
+                Tables\Filters\SelectFilter::make('provider')
+                    ->options([
+                        'manual' => 'Manual',
+                        'zazy'   => 'Zazy',
+                        'ugeen'  => 'Ugeen',
                     ]),
             ])
             ->actions([
@@ -302,6 +406,37 @@ class IptvAccountResource extends Resource
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
+                    Tables\Actions\BulkAction::make('change_source')
+                        ->label('Change Source')
+                        ->icon('heroicon-o-arrow-path-rounded-square')
+                        ->color('info')
+                        ->form([
+                            Forms\Components\Select::make('m3u_source_id')
+                                ->label('New M3U Source')
+                                ->options(M3uSource::where('is_active', true)->pluck('name', 'id'))
+                                ->searchable()
+                                ->required()
+                                ->helperText('⚠️ This will clear all channel group restrictions for selected accounts'),
+                        ])
+                        ->requiresConfirmation()
+                        ->modalHeading('Change Source for Selected Accounts')
+                        ->modalDescription('Changing the source will reset channel group access to "all groups" for the selected accounts.')
+                        ->action(function ($records, array $data) {
+                            $count = 0;
+                            foreach ($records as $account) {
+                                $account->update([
+                                    'm3u_source_id'        => $data['m3u_source_id'],
+                                    'has_group_restrictions' => false,
+                                ]);
+                                $account->channelGroups()->detach();
+                                $count++;
+                            }
+                            Notification::make()
+                                ->title("Source changed for {$count} accounts")
+                                ->success()
+                                ->send();
+                        }),
+
                     Tables\Actions\BulkAction::make('renew_30_days')
                         ->label('Renew 30 Days')
                         ->icon('heroicon-o-calendar')

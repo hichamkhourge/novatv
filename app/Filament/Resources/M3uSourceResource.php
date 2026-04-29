@@ -203,6 +203,20 @@ class M3uSourceResource extends Resource
                 Tables\Filters\TernaryFilter::make('is_active')->label('Active'),
             ])
             ->actions([
+                Tables\Actions\Action::make('view_accounts')
+                    ->label('View Accounts')
+                    ->icon('heroicon-o-user-group')
+                    ->color('info')
+                    ->url(fn (M3uSource $record) => route('filament.admin.resources.iptv-accounts.index', [
+                        'tableFilters' => [
+                            'm3u_source_id' => [
+                                'values' => [$record->id],
+                            ],
+                        ],
+                    ]))
+                    ->badge(fn (M3uSource $record) => $record->iptvAccounts()->count())
+                    ->visible(fn (M3uSource $record) => $record->iptvAccounts()->exists()),
+
                 Tables\Actions\Action::make('sync')
                     ->label('Sync Now')
                     ->icon('heroicon-o-arrow-path')
@@ -264,6 +278,13 @@ class M3uSourceResource extends Resource
                     Tables\Actions\DeleteBulkAction::make(),
                 ]),
             ]);
+    }
+
+    public static function getRelations(): array
+    {
+        return [
+            RelationManagers\AccountsRelationManager::class,
+        ];
     }
 
     public static function getPages(): array
