@@ -93,18 +93,22 @@ class GenerateProviderAccountJob implements ShouldQueue
      */
     protected function handleUgeenAutomation(IptvAccount $account, ProviderAutomationService $automation): array
     {
-        // Get provider credentials from M3uSource if available
-        $username = null;
-        $password = null;
+        // Prefer account-level Ugeen login credentials. Older records may only
+        // have provider credentials stored on their linked M3U source.
+        $username = $account->provider_login_email;
+        $password = $account->provider_login_password;
         $packageId = null;
 
-        if ($account->m3u_source_id) {
+        if ((! $username || ! $password) && $account->m3u_source_id) {
             $source = M3uSource::find($account->m3u_source_id);
             if ($source) {
-                $username = $source->provider_username;
-                $password = $source->provider_password;
+                $username = $username ?: $source->provider_username;
+                $password = $password ?: $source->provider_password;
                 $packageId = $source->provider_config['package_id'] ?? null;
             }
+        } elseif ($account->m3u_source_id) {
+            $source = M3uSource::find($account->m3u_source_id);
+            $packageId = $source?->provider_config['package_id'] ?? null;
         }
 
         // For renewals, use the renewal script

@@ -23,6 +23,8 @@ class IptvAccount extends Model
         // Provider automation
         'provider',
         'provider_account_id',
+        'provider_login_email',
+        'provider_login_password',
         'provider_status',
         'provider_error',
         'provider_synced_at',
@@ -33,6 +35,8 @@ class IptvAccount extends Model
         'max_connections'        => 'integer',
         'has_group_restrictions' => 'boolean',
         'allow_adult'            => 'boolean',
+        'provider_login_email'   => 'encrypted',
+        'provider_login_password' => 'encrypted',
         'provider_synced_at'     => 'datetime',
     ];
 

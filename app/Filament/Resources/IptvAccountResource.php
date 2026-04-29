@@ -73,19 +73,40 @@ class IptvAccountResource extends Resource
                     ->maxLength(255)
                     ->alphaNum()
                     ->helperText(fn (Forms\Get $get) => $get('provider') !== 'manual'
-                        ? 'Used as your client username in this app (not the Zazy username — that is stored in the M3U source)'
+                        ? 'Used as the client username in this app.'
                         : null
                     ),
 
                 Forms\Components\TextInput::make('password')
-                    ->required(fn (Forms\Get $get) => $get('provider') === 'manual')
+                    ->required(fn (Forms\Get $get) => $get('provider') !== 'zazy')
                     ->maxLength(255)
                     ->helperText(fn (Forms\Get $get) => $get('provider') !== 'manual'
-                        ? 'Leave blank — will be auto-filled once the provider generates credentials'
+                        ? ($get('provider') === 'zazy'
+                            ? 'Leave blank — will be auto-filled once Zazy generates credentials'
+                            : 'Used as the client password in this app.')
                         : 'Stored in plaintext — IPTV clients send it in URLs'
                     )
-                    ->default(fn (Forms\Get $get) => $get('provider') !== 'manual' ? 'pending' : null),
+                    ->default(fn (Forms\Get $get) => $get('provider') === 'zazy' ? 'pending' : null),
             ])->columns(2),
+
+            Forms\Components\Section::make('Ugeen Account')->schema([
+                Forms\Components\TextInput::make('provider_login_email')
+                    ->label('Ugeen Email')
+                    ->email()
+                    ->required(fn (Get $get) => $get('provider') === 'ugeen')
+                    ->dehydrated(fn (Get $get) => $get('provider') === 'ugeen')
+                    ->maxLength(255),
+
+                Forms\Components\TextInput::make('provider_login_password')
+                    ->label('Ugeen Password')
+                    ->password()
+                    ->revealable()
+                    ->required(fn (Get $get) => $get('provider') === 'ugeen')
+                    ->dehydrated(fn (Get $get) => $get('provider') === 'ugeen')
+                    ->maxLength(255),
+            ])
+                ->columns(2)
+                ->visible(fn (Get $get) => $get('provider') === 'ugeen'),
 
             Forms\Components\Section::make('M3U Source')->schema([
                 Forms\Components\Select::make('m3u_source_id')
