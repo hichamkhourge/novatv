@@ -158,30 +158,34 @@ class UgeenWebhookController extends Controller
             'is_renewal' => $isRenewal
         ]);
 
-        // If credentials provided, update M3U source (for new account creation)
-        if (!empty($data['username']) && !empty($data['password']) && !empty($data['host'])) {
-            if ($isRenewal && $account->m3u_source_id) {
+        // Always use hardcoded Ugeen Xtream host
+        $ugeenHost = 'http://ugeen.live:8080';
+
+        // If credentials provided, create/update M3U source
+        if (!empty($data['username']) && !empty($data['password'])) {
+            if ($account->m3u_source_id) {
                 // Update existing M3U source credentials
                 $m3uSource = M3uSource::find($account->m3u_source_id);
                 if ($m3uSource) {
                     $m3uSource->update([
                         'xtream_username' => $data['username'],
                         'xtream_password' => $data['password'],
-                        'xtream_host' => $data['host'],
+                        'xtream_host' => $ugeenHost, // Always use hardcoded host
                         'status' => 'active',
                     ]);
 
-                    Log::info('M3U source credentials renewed', [
+                    Log::info('M3U source credentials updated', [
                         'source_id' => $m3uSource->id,
-                        'account_id' => $account->id
+                        'account_id' => $account->id,
+                        'host' => $ugeenHost
                     ]);
                 }
             } else {
-                // Create a fresh M3U source per Ugeen account from the returned credentials.
+                // Create a fresh M3U source with extracted credentials
                 $m3uSource = M3uSource::create([
                     'name' => "Ugeen - {$account->username}",
                     'source_type' => 'xtream',
-                    'xtream_host' => $data['host'],
+                    'xtream_host' => $ugeenHost, // Always use hardcoded host
                     'xtream_username' => $data['username'],
                     'xtream_password' => $data['password'],
                     'xtream_stream_types' => ['live', 'movie', 'series'],
@@ -193,7 +197,9 @@ class UgeenWebhookController extends Controller
 
                 Log::info('M3U source created', [
                     'source_id' => $m3uSource->id,
-                    'account_id' => $account->id
+                    'account_id' => $account->id,
+                    'host' => $ugeenHost,
+                    'username' => $data['username']
                 ]);
 
                 // Update IPTV account with source
@@ -202,8 +208,8 @@ class UgeenWebhookController extends Controller
                 ]);
             }
 
-            // Dispatch job to import channels from Xtream API (only for new accounts or if needed)
-            if ($account->m3u_source_id && (!$isRenewal || !$account->m3u_source->channels()->exists())) {
+            // Dispatch job to import channels from Xtream API
+            if ($account->m3u_source_id) {
                 ImportXtreamJob::dispatch($account->m3u_source_id);
 
                 Log::info('ImportXtreamJob dispatched', [
@@ -212,7 +218,7 @@ class UgeenWebhookController extends Controller
                 ]);
             }
         } else {
-            Log::info('No credentials provided - subscription renewed without credential changes', [
+            Log::warning('No credentials provided in webhook - cannot create/update M3U source', [
                 'account_id' => $account->id
             ]);
         }
