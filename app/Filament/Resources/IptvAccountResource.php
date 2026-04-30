@@ -56,7 +56,7 @@ class IptvAccountResource extends Resource
 
                 Forms\Components\Placeholder::make('provider_status_display')
                     ->label('Automation Status')
-                    ->content(fn ($record) => {
+                    ->content(function ($record) {
                         if (!$record || $record->provider === 'manual') {
                             return '—';
                         }
