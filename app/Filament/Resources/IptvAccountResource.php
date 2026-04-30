@@ -56,11 +56,20 @@ class IptvAccountResource extends Resource
 
                 Forms\Components\Placeholder::make('provider_status_display')
                     ->label('Automation Status')
-                    ->content(fn ($record) => match ($record?->provider_status) {
-                        'pending' => '⏳ Running…',
-                        'done'    => '✅ Credentials ready',
-                        'failed'  => '❌ Failed: ' . ($record->provider_error ?? 'unknown'),
-                        default   => '—',
+                    ->content(fn ($record) => {
+                        if (!$record || $record->provider === 'manual') {
+                            return '—';
+                        }
+
+                        $status = $record->provider_status;
+                        return match ($status) {
+                            'pending' => '⏳ Running… (refresh page to see progress)',
+                            'done'    => '✅ Credentials ready' .
+                                       ($record->provider_synced_at ? ' (synced ' . $record->provider_synced_at->diffForHumans() . ')' : ''),
+                            'failed'  => '❌ Failed: ' . ($record->provider_error ?? 'unknown'),
+                            null      => '—',
+                            default   => "⚙️ {$status}", // Show progress messages with gear emoji
+                        };
                     })
                     ->visible(fn ($record) => $record && $record->provider !== 'manual'),
             ])->columns(1),
@@ -354,10 +363,18 @@ class IptvAccountResource extends Resource
                         'pending' => 'warning',
                         'done'    => 'success',
                         'failed'  => 'danger',
-                        default   => 'gray',
+                        default   => $state ? 'info' : 'gray', // Progress messages show as info blue
                     })
+                    ->formatStateUsing(fn (?string $state): string => match ($state) {
+                        'pending' => '⏳ Pending',
+                        'done'    => '✅ Done',
+                        'failed'  => '❌ Failed',
+                        null      => '—',
+                        default   => $state, // Show progress messages as-is
+                    })
+                    ->wrap() // Allow text wrapping for long progress messages
                     ->placeholder('—')
-                    ->toggleable(isToggledHiddenByDefault: true),
+                    ->toggleable(isToggledHiddenByDefault: false), // Visible by default
 
                 Tables\Columns\BadgeColumn::make('status')
                     ->colors([
@@ -432,6 +449,48 @@ class IptvAccountResource extends Resource
                         'x-on:click' => "navigator.clipboard.writeText('" . url('/') . ":::" . "{$record->username}:::{$record->password}')",
                     ])
                     ->tooltip('Copy Xtream connection string to clipboard'),
+
+                Tables\Actions\Action::make('renew_ugeen')
+                    ->label('Renew')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('warning')
+                    ->tooltip(fn (IptvAccount $record) => match ($record->provider_status) {
+                        'pending' => 'Renewal in progress: ' . $record->provider_status,
+                        'failed'  => 'Last renewal failed: ' . $record->provider_error,
+                        'done'    => 'Last renewed ' . $record->provider_synced_at?->diffForHumans(),
+                        default   => 'Trigger manual renewal'
+                    })
+                    ->visible(fn (IptvAccount $record) => $record->provider === 'ugeen')
+                    ->disabled(fn (IptvAccount $record) => $record->provider_status === 'pending')
+                    ->requiresConfirmation()
+                    ->modalHeading('Renew Ugeen Account')
+                    ->modalDescription(fn (IptvAccount $record) =>
+                        "This will trigger the Ugeen automation script to renew credentials for account \"{$record->username}\". " .
+                        "The process takes 2-8 minutes and you can track progress in the 'Prov. Status' column."
+                    )
+                    ->action(function (IptvAccount $record) {
+                        // Check if already pending
+                        if ($record->provider_status === 'pending') {
+                            Notification::make()
+                                ->title('Renewal already in progress')
+                                ->body('Please wait for the current renewal to complete.')
+                                ->warning()
+                                ->send();
+                            return;
+                        }
+
+                        // Dispatch renewal job
+                        \App\Jobs\GenerateProviderAccountJob::dispatch($record->id, isRenewal: true)
+                            ->onQueue('default');
+
+                        // Show success notification
+                        Notification::make()
+                            ->title('⏳ Renewal Started')
+                            ->body("Ugeen renewal script is running for \"{$record->username}\". Refresh the page to see progress updates in the 'Prov. Status' column.")
+                            ->warning()
+                            ->persistent()
+                            ->send();
+                    }),
 
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
