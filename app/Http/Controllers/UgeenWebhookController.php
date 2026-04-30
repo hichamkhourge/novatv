@@ -26,12 +26,14 @@ class UgeenWebhookController extends Controller
      * Expected payload:
      * {
      *     "user_id": 123,
-     *     "status": "success|failed",
-     *     "username": "...",
-     *     "password": "...",
-     *     "host": "http://ugeen.live",
-     *     "m3u_url": "...",
-     *     "error": "...",
+     *     "status": "success|failed|in_progress",
+     *     "username": "...",       // Optional - only for new account creation
+     *     "password": "...",       // Optional - only for new account creation
+     *     "host": "http://ugeen.live",  // Optional
+     *     "m3u_url": "...",        // Optional
+     *     "error": "...",          // Required if status=failed
+     *     "message": "...",        // Progress message if status=in_progress
+     *     "progress": 50,          // Progress percentage if status=in_progress
      *     "is_renewal": false,
      *     "timestamp": "2024-01-01T00:00:00Z"
      * }
@@ -44,12 +46,14 @@ class UgeenWebhookController extends Controller
         // Validate request payload
         $validator = Validator::make($request->all(), [
             'user_id' => 'required|integer|exists:iptv_accounts,id',
-            'status' => 'required|in:success,failed',
-            'username' => 'required_if:status,success|string|max:255',
-            'password' => 'required_if:status,success|string|max:255',
-            'host' => 'required_if:status,success|url',
+            'status' => 'required|in:success,failed,in_progress',
+            'username' => 'nullable|string|max:255',  // Optional - Ugeen renewals don't change credentials
+            'password' => 'nullable|string|max:255',  // Optional
+            'host' => 'nullable|url',
             'm3u_url' => 'nullable|url',
             'error' => 'required_if:status,failed|string',
+            'message' => 'required_if:status,in_progress|string',  // Progress message
+            'progress' => 'nullable|integer|min:0|max:100',  // Progress percentage
             'is_renewal' => 'nullable|boolean',
             'timestamp' => 'nullable|date',
         ]);
@@ -81,12 +85,20 @@ class UgeenWebhookController extends Controller
                 'is_renewal' => $isRenewal
             ]);
 
-            if ($data['status'] === 'success') {
+            if ($data['status'] === 'in_progress') {
+                $this->handleProgressCallback($account, $data);
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Progress update received',
+                    'account_id' => $account->id
+                ], 200);
+            } elseif ($data['status'] === 'success') {
                 $this->handleSuccessCallback($account, $data, $isRenewal);
 
                 return response()->json([
                     'success' => true,
-                    'message' => $isRenewal ? 'Account renewed successfully' : 'Credentials created successfully',
+                    'message' => 'Account renewed successfully',
                     'account_id' => $account->id
                 ], 200);
             } else {
@@ -115,55 +127,93 @@ class UgeenWebhookController extends Controller
     }
 
     /**
+     * Handle progress update callback.
+     */
+    protected function handleProgressCallback(IptvAccount $account, array $data): void
+    {
+        $progressMessage = $data['message'] ?? 'Processing...';
+        $progressPercent = $data['progress'] ?? 0;
+
+        Log::info('Ugeen automation progress update', [
+            'account_id' => $account->id,
+            'message' => $progressMessage,
+            'progress' => $progressPercent
+        ]);
+
+        // Update account with progress message
+        $account->update([
+            'provider_status' => $progressMessage,  // Store progress message in provider_status
+            'provider_synced_at' => now(),
+        ]);
+    }
+
+    /**
      * Handle successful automation callback.
      */
     protected function handleSuccessCallback(IptvAccount $account, array $data, bool $isRenewal): void
     {
         Log::info('Handling successful Ugeen automation', [
             'account_id' => $account->id,
-            'username' => $data['username'],
+            'username' => $data['username'] ?? 'N/A',
             'is_renewal' => $isRenewal
         ]);
 
-        if ($isRenewal && $account->m3u_source_id) {
-            // Update existing M3U source credentials
-            $m3uSource = M3uSource::find($account->m3u_source_id);
-            if ($m3uSource) {
-                $m3uSource->update([
+        // If credentials provided, update M3U source (for new account creation)
+        if (!empty($data['username']) && !empty($data['password']) && !empty($data['host'])) {
+            if ($isRenewal && $account->m3u_source_id) {
+                // Update existing M3U source credentials
+                $m3uSource = M3uSource::find($account->m3u_source_id);
+                if ($m3uSource) {
+                    $m3uSource->update([
+                        'xtream_username' => $data['username'],
+                        'xtream_password' => $data['password'],
+                        'xtream_host' => $data['host'],
+                        'status' => 'active',
+                    ]);
+
+                    Log::info('M3U source credentials renewed', [
+                        'source_id' => $m3uSource->id,
+                        'account_id' => $account->id
+                    ]);
+                }
+            } else {
+                // Create a fresh M3U source per Ugeen account from the returned credentials.
+                $m3uSource = M3uSource::create([
+                    'name' => "Ugeen - {$account->username}",
+                    'source_type' => 'xtream',
+                    'xtream_host' => $data['host'],
                     'xtream_username' => $data['username'],
                     'xtream_password' => $data['password'],
-                    'xtream_host' => $data['host'],
+                    'xtream_stream_types' => ['live', 'movie', 'series'],
+                    'provider_type' => 'ugeen',
                     'status' => 'active',
+                    'is_active' => true,
+                    'excluded_groups' => ['24/7'], // Exclude VOD groups
                 ]);
 
-                Log::info('M3U source credentials renewed', [
+                Log::info('M3U source created', [
                     'source_id' => $m3uSource->id,
+                    'account_id' => $account->id
+                ]);
+
+                // Update IPTV account with source
+                $account->update([
+                    'm3u_source_id' => $m3uSource->id,
+                ]);
+            }
+
+            // Dispatch job to import channels from Xtream API (only for new accounts or if needed)
+            if ($account->m3u_source_id && (!$isRenewal || !$account->m3u_source->channels()->exists())) {
+                ImportXtreamJob::dispatch($account->m3u_source_id);
+
+                Log::info('ImportXtreamJob dispatched', [
+                    'source_id' => $account->m3u_source_id,
                     'account_id' => $account->id
                 ]);
             }
         } else {
-            // Create a fresh M3U source per Ugeen account from the returned credentials.
-            $m3uSource = M3uSource::create([
-                'name' => "Ugeen - {$account->username}",
-                'source_type' => 'xtream',
-                'xtream_host' => $data['host'],
-                'xtream_username' => $data['username'],
-                'xtream_password' => $data['password'],
-                'xtream_stream_types' => ['live', 'movie', 'series'],
-                'provider_type' => 'ugeen',
-                'status' => 'active',
-                'is_active' => true,
-                'excluded_groups' => ['24/7'], // Exclude VOD groups
-            ]);
-
-            Log::info('M3U source created', [
-                'source_id' => $m3uSource->id,
+            Log::info('No credentials provided - subscription renewed without credential changes', [
                 'account_id' => $account->id
-            ]);
-
-            // Update IPTV account with source
-            $account->update([
-                'm3u_source_id' => $m3uSource->id,
             ]);
         }
 
@@ -179,23 +229,9 @@ class UgeenWebhookController extends Controller
             'source_id' => $account->m3u_source_id
         ]);
 
-        // Dispatch job to import channels from Xtream API (only for new accounts or if needed)
-        if (!$isRenewal || !$account->m3u_source->channels()->exists()) {
-            ImportXtreamJob::dispatch($account->m3u_source_id);
-
-            Log::info('ImportXtreamJob dispatched', [
-                'source_id' => $account->m3u_source_id,
-                'account_id' => $account->id
-            ]);
-        }
-
         // Send Telegram notification
         try {
-            if ($isRenewal) {
-                $this->telegram->notifyAccountRenewed($account);
-            } else {
-                $this->telegram->notifyAccountActivated($account);
-            }
+            $this->telegram->notifyAccountRenewed($account);
         } catch (\Exception $e) {
             Log::error('Failed to send Telegram notification', [
                 'error' => $e->getMessage(),
