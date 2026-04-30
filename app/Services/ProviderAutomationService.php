@@ -264,7 +264,7 @@ class ProviderAutomationService
 
             $response = Http::withToken($this->apiKey)
                 ->timeout(30) // Short timeout - the script runs in background
-                ->post("{$this->baseUrl}/api/renew/ugeen", $payload);
+                ->post("{$this->baseUrl}/api/generate/ugeen", $payload);
 
             $body = $response->json();
 
