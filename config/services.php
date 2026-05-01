@@ -51,6 +51,7 @@ return [
     // ── Ugeen Automation Configuration ────────────────────────────────────────
     'ugeen_automation' => [
         'webhook_token' => env('UGEEN_WEBHOOK_TOKEN', ''),
+        'retry_buffer_minutes' => env('UGEEN_RETRY_BUFFER_MINUTES', 2),
     ],
 
     // ── Telegram Notifications ────────────────────────────────────────────────
