@@ -28,6 +28,7 @@ class IptvAccount extends Model
         'provider_status',
         'provider_error',
         'provider_synced_at',
+        'retry_scheduled_at',
     ];
 
     protected $casts = [
@@ -38,6 +39,7 @@ class IptvAccount extends Model
         'provider_login_email'   => 'encrypted',
         'provider_login_password' => 'encrypted',
         'provider_synced_at'     => 'datetime',
+        'retry_scheduled_at'     => 'datetime',
     ];
 
     protected static function booted(): void
@@ -178,5 +180,34 @@ class IptvAccount extends Model
         }
 
         return $restricted->values();
+    }
+
+    /**
+     * Get human-readable text for when the next renewal is scheduled.
+     * Returns "Will renew in X minutes" or "Will renew in X hours".
+     */
+    public function getNextRenewalHumanReadable(): ?string
+    {
+        if (!$this->retry_scheduled_at) {
+            return null;
+        }
+
+        $now = now();
+
+        // If scheduled time is in the past
+        if ($this->retry_scheduled_at->isPast()) {
+            return 'Renewal overdue';
+        }
+
+        $diffInMinutes = $now->diffInMinutes($this->retry_scheduled_at);
+
+        // Less than 60 minutes: show in minutes
+        if ($diffInMinutes < 60) {
+            return "Will renew in {$diffInMinutes} " . str('minute')->plural($diffInMinutes);
+        }
+
+        // 60 minutes or more: show in hours
+        $diffInHours = $now->diffInHours($this->retry_scheduled_at);
+        return "Will renew in {$diffInHours} " . str('hour')->plural($diffInHours);
     }
 }

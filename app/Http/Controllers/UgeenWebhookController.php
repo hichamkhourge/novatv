@@ -54,6 +54,7 @@ class UgeenWebhookController extends Controller
             'error' => 'required_if:status,failed|string',
             'message' => 'required_if:status,in_progress|string',  // Progress message
             'progress' => 'nullable|integer|min:0|max:100',  // Progress percentage
+            'renew_remaining_minutes' => 'nullable|integer|min:0',  // Minutes until server ready
             'is_renewal' => 'nullable|boolean',
             'timestamp' => 'nullable|date',
         ]);
@@ -133,11 +134,13 @@ class UgeenWebhookController extends Controller
     {
         $progressMessage = $data['message'] ?? 'Processing...';
         $progressPercent = $data['progress'] ?? 0;
+        $renewRemainingMinutes = $data['renew_remaining_minutes'] ?? null;
 
         Log::info('Ugeen automation progress update', [
             'account_id' => $account->id,
             'message' => $progressMessage,
-            'progress' => $progressPercent
+            'progress' => $progressPercent,
+            'renew_remaining_minutes' => $renewRemainingMinutes
         ]);
 
         // Update account with progress message
@@ -145,6 +148,11 @@ class UgeenWebhookController extends Controller
             'provider_status' => $progressMessage,  // Store progress message in provider_status
             'provider_synced_at' => now(),
         ]);
+
+        // If renew_remaining_minutes is provided, schedule delayed retry
+        if ($renewRemainingMinutes !== null && $renewRemainingMinutes > 0) {
+            $this->scheduleDelayedRetry($account, $renewRemainingMinutes);
+        }
     }
 
     /**
@@ -223,11 +231,12 @@ class UgeenWebhookController extends Controller
             ]);
         }
 
-        // Update IPTV account provider status
+        // Update IPTV account provider status and clear retry scheduling
         $account->update([
             'provider_status' => 'done',
             'provider_error' => null,
             'provider_synced_at' => now(),
+            'retry_scheduled_at' => null,  // Clear retry scheduling on success
         ]);
 
         Log::info('IPTV account updated', [
@@ -302,5 +311,36 @@ class UgeenWebhookController extends Controller
 
             abort(401, 'Unauthorized - Invalid webhook token');
         }
+    }
+
+    /**
+     * Schedule a delayed retry for account renewal.
+     */
+    protected function scheduleDelayedRetry(IptvAccount $account, int $remainingMinutes): void
+    {
+        // Add buffer (default 2 minutes) to ensure server is ready
+        $bufferMinutes = config('services.ugeen_automation.retry_buffer_minutes', 2);
+        $delayMinutes = $remainingMinutes + $bufferMinutes;
+
+        // Calculate retry time
+        $retryAt = now()->addMinutes($delayMinutes);
+
+        Log::info('Scheduling delayed Ugeen renewal retry', [
+            'account_id' => $account->id,
+            'remaining_minutes' => $remainingMinutes,
+            'buffer_minutes' => $bufferMinutes,
+            'total_delay_minutes' => $delayMinutes,
+            'retry_at' => $retryAt->toDateTimeString(),
+        ]);
+
+        // Dispatch delayed job
+        \App\Jobs\GenerateProviderAccountJob::dispatch($account->id, isRenewal: true)
+            ->delay($retryAt)
+            ->onQueue('default');
+
+        // Update account with retry schedule
+        $account->update([
+            'retry_scheduled_at' => $retryAt,
+        ]);
     }
 }

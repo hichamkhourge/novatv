@@ -62,7 +62,7 @@ class IptvAccountResource extends Resource
                         }
 
                         $status = $record->provider_status;
-                        return match ($status) {
+                        $statusText = match ($status) {
                             'pending' => '⏳ Running… (refresh page to see progress)',
                             'done'    => '✅ Credentials ready' .
                                        ($record->provider_synced_at ? ' (synced ' . $record->provider_synced_at->diffForHumans() . ')' : ''),
@@ -70,6 +70,14 @@ class IptvAccountResource extends Resource
                             null      => '—',
                             default   => "⚙️ {$status}", // Show progress messages with gear emoji
                         };
+
+                        // Add retry scheduling info if available
+                        if ($record->retry_scheduled_at) {
+                            $retryText = $record->getNextRenewalHumanReadable();
+                            $statusText .= "\n\n🔄 {$retryText}";
+                        }
+
+                        return $statusText;
                     })
                     ->visible(fn ($record) => $record && $record->provider !== 'manual'),
             ])->columns(1),
@@ -371,9 +379,23 @@ class IptvAccountResource extends Resource
                         null      => '—',
                         default   => $state, // Show progress messages as-is
                     })
+                    ->description(fn ($record) => $record->retry_scheduled_at
+                        ? '🔄 ' . $record->getNextRenewalHumanReadable()
+                        : null)
                     ->wrap() // Allow text wrapping for long progress messages
                     ->placeholder('—')
                     ->toggleable(isToggledHiddenByDefault: false), // Visible by default
+
+                Tables\Columns\TextColumn::make('retry_scheduled_at')
+                    ->label('Next Renewal')
+                    ->badge()
+                    ->color(fn ($record) => $record->retry_scheduled_at ? 'warning' : 'gray')
+                    ->formatStateUsing(fn ($record) => $record->getNextRenewalHumanReadable() ?? '—')
+                    ->tooltip(fn ($record) => $record->retry_scheduled_at
+                        ? 'Scheduled: ' . $record->retry_scheduled_at->format('d M Y H:i')
+                        : 'No renewal scheduled')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: false),
 
                 Tables\Columns\BadgeColumn::make('status')
                     ->colors([
