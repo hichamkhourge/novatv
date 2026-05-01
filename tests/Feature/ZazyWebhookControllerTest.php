@@ -90,6 +90,11 @@ class ZazyWebhookControllerTest extends TestCase
             'is_active' => 1,
         ]);
 
+        $this->assertSame(
+            ['live'],
+            json_decode(DB::table('m3u_sources')->where('id', $newSourceId)->value('xtream_stream_types'), true)
+        );
+
         $this->assertSame('done', $account->provider_status);
         $this->assertNull($account->provider_error);
         $this->assertNotNull($account->provider_synced_at);

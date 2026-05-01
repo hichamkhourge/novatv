@@ -277,15 +277,14 @@ class IptvAccountResource extends Resource
                     ->label('Expires At')
                     ->options(static::expiryPresetOptions())
                     ->default(static::EXPIRY_PRESET_1_DAY)
-                    ->live()
-                    ->dehydrated(false),
+                    ->live(),
 
                 Forms\Components\DatePicker::make('expires_at_custom_date')
                     ->label('Custom Expiry Date')
                     ->native(false)
                     ->visible(fn (Get $get) => $get('expires_at_preset') === static::EXPIRY_PRESET_CUSTOM)
                     ->required(fn (Get $get) => $get('expires_at_preset') === static::EXPIRY_PRESET_CUSTOM)
-                    ->dehydrated(false),
+                    ->dehydrated(fn (Get $get) => $get('expires_at_preset') === static::EXPIRY_PRESET_CUSTOM),
 
                 Forms\Components\Toggle::make('allow_adult')
                     ->label('Enable Adult Groups')

@@ -119,7 +119,7 @@ class ZazyWebhookController extends Controller
             'xtream_host' => $data['host'],
             'xtream_username' => $data['username'],
             'xtream_password' => $data['password'],
-            'xtream_stream_types' => ['live', 'movie', 'series'],
+            'xtream_stream_types' => ['live'],
             'status' => 'active',
             'is_active' => true,
             'excluded_groups' => ['24/7'], // Exclude VOD groups
