@@ -203,11 +203,13 @@ class IptvAccount extends Model
 
         // Less than 60 minutes: show in minutes
         if ($diffInMinutes < 60) {
-            return "Will renew in {$diffInMinutes} " . str('minute')->plural($diffInMinutes);
+            $roundedMinutes = round($diffInMinutes);
+            return "Will renew in {$roundedMinutes} " . str('minute')->plural($roundedMinutes);
         }
 
         // 60 minutes or more: show in hours
-        $diffInHours = $now->diffInHours($this->retry_scheduled_at);
-        return "Will renew in {$diffInHours} " . str('hour')->plural($diffInHours);
+        $diffInHours = $now->diffInHours($this->retry_scheduled_at, false);
+        $roundedHours = round($diffInHours);
+        return "Will renew in {$roundedHours} " . str('hour')->plural($roundedHours);
     }
 }
