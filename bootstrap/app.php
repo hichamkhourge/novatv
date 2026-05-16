@@ -27,6 +27,7 @@ return Application::configure(basePath: dirname(__DIR__))
                 ->middleware(['api'])
                 ->group(function () {
                     Route::post('/zazy-automation', [\App\Http\Controllers\ZazyWebhookController::class, 'handleCallback']);
+                    Route::post('/layerseven-automation', [\App\Http\Controllers\LayerSevenWebhookController::class, 'handleCallback']);
                     Route::post('/ugeen-automation', [\App\Http\Controllers\UgeenWebhookController::class, 'handleCallback']);
                 });
         },

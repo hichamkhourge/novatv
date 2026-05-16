@@ -58,8 +58,9 @@ class GenerateProviderAccountJob implements ShouldQueue
         // Trigger the automation script via Flask API (async approach)
         // The script will callback to our webhook when complete
         $result = match ($account->provider) {
-            'zazy'  => $automation->generateZazyViaScript($account->id),
-            'ugeen' => $this->handleUgeenAutomation($account, $automation),
+            'zazy'       => $automation->generateZazyViaScript($account->id),
+            'layerseven' => $automation->generateLayerSevenViaScript($account->id),
+            'ugeen'      => $this->handleUgeenAutomation($account, $automation),
             default => ['success' => false, 'error' => "No automation for provider: {$account->provider}"],
         };
 

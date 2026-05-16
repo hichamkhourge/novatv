@@ -41,8 +41,9 @@ class IptvAccountResource extends Resource
                     ->label('Source Provider')
                     ->options([
                         'manual' => '✋ Manual (enter credentials yourself)',
-                        'zazy'   => '🤖 Zazy TV (auto-generate via Selenium)',
-                        'ugeen'  => '🤖 Ugeen (auto-generate via Selenium)',
+                        'zazy'       => '🤖 Zazy TV (auto-generate via Selenium)',
+                        'layerseven' => '🤖 LayerSeven IPTV (auto-generate via Selenium)',
+                        'ugeen'      => '🤖 Ugeen (auto-generate via Selenium)',
                     ])
                     ->default('manual')
                     ->required()
@@ -51,7 +52,7 @@ class IptvAccountResource extends Resource
 
                 Forms\Components\Placeholder::make('provider_info')
                     ->label('')
-                    ->content('⏳ After saving, a background job will run the Zazy automation script (2–8 min). The account will show status "pending" until credentials are ready.')
+                    ->content('⏳ After saving, a background job will run the provider automation script (2–8 min). The account will show status "pending" until credentials are ready.')
                     ->visible(fn (Forms\Get $get) => $get('provider') !== 'manual'),
 
                 Forms\Components\Placeholder::make('provider_status_display')
@@ -95,15 +96,15 @@ class IptvAccountResource extends Resource
                     ),
 
                 Forms\Components\TextInput::make('password')
-                    ->required(fn (Forms\Get $get) => $get('provider') !== 'zazy')
+                    ->required(fn (Forms\Get $get) => ! in_array($get('provider'), ['zazy', 'layerseven'], true))
                     ->maxLength(255)
                     ->helperText(fn (Forms\Get $get) => $get('provider') !== 'manual'
-                        ? ($get('provider') === 'zazy'
-                            ? 'Leave blank — will be auto-filled once Zazy generates credentials'
+                        ? (in_array($get('provider'), ['zazy', 'layerseven'], true)
+                            ? 'Leave blank — will be auto-filled once the provider generates credentials'
                             : 'Used as the client password in this app.')
                         : 'Stored in plaintext — IPTV clients send it in URLs'
                     )
-                    ->default(fn (Forms\Get $get) => $get('provider') === 'zazy' ? 'pending' : null),
+                    ->default(fn (Forms\Get $get) => in_array($get('provider'), ['zazy', 'layerseven'], true) ? 'pending' : null),
             ])->columns(2),
 
             Forms\Components\Section::make('Ugeen Account')->schema([
@@ -260,8 +261,11 @@ class IptvAccountResource extends Resource
 
                 Forms\Components\Placeholder::make('zazy_source_info')
                     ->label('Linked M3U Source')
-                    ->content('A new source will be created automatically for this Zazy account after the script returns the provider username and password.')
-                    ->visible(fn (Get $get) => $get('provider') === 'zazy'),
+                    ->content(fn (Get $get) => 'A new source will be created automatically for this ' . match ($get('provider')) {
+                        'layerseven' => 'LayerSeven',
+                        default => 'Zazy',
+                    } . ' account after the script returns the provider username and password.')
+                    ->visible(fn (Get $get) => in_array($get('provider'), ['zazy', 'layerseven'], true)),
             ])->columns(1),
 
             Forms\Components\Section::make('Subscription')->schema([
@@ -352,13 +356,15 @@ class IptvAccountResource extends Resource
                     ->label('Provider')
                     ->badge()
                     ->color(fn (string $state): string => match ($state) {
-                        'zazy'   => 'success',
-                        'ugeen'  => 'warning',
+                        'zazy'       => 'success',
+                        'layerseven' => 'info',
+                        'ugeen'      => 'warning',
                         default  => 'gray',
                     })
                     ->formatStateUsing(fn (string $state) => match ($state) {
-                        'zazy'   => '🤖 Zazy',
-                        'ugeen'  => '🤖 Ugeen',
+                        'zazy'       => '🤖 Zazy',
+                        'layerseven' => '🤖 LayerSeven',
+                        'ugeen'      => '🤖 Ugeen',
                         default  => '✋ Manual',
                     })
                     ->sortable(),
@@ -445,9 +451,10 @@ class IptvAccountResource extends Resource
 
                 Tables\Filters\SelectFilter::make('provider')
                     ->options([
-                        'manual' => 'Manual',
-                        'zazy'   => 'Zazy',
-                        'ugeen'  => 'Ugeen',
+                        'manual'     => 'Manual',
+                        'zazy'       => 'Zazy',
+                        'layerseven' => 'LayerSeven',
+                        'ugeen'      => 'Ugeen',
                     ]),
             ])
             ->actions([

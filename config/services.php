@@ -48,6 +48,11 @@ return [
         'webhook_token' => env('ZAZY_WEBHOOK_TOKEN', ''),
     ],
 
+    // ── LayerSeven Automation Configuration ──────────────────────────────────
+    'layerseven_automation' => [
+        'webhook_token' => env('LAYERSEVEN_WEBHOOK_TOKEN', ''),
+    ],
+
     // ── Ugeen Automation Configuration ────────────────────────────────────────
     'ugeen_automation' => [
         'webhook_token' => env('UGEEN_WEBHOOK_TOKEN', ''),

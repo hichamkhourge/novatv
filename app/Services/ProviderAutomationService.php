@@ -139,6 +139,81 @@ class ProviderAutomationService
     }
 
     /**
+     * Trigger LayerSeven account generation via Python script (async with webhook callback).
+     * The script will POST results back to our webhook endpoint when complete.
+     *
+     * @param int $accountId The IPTV account ID
+     * @return array{success: bool, message: string, error: string|null}
+     */
+    public function generateLayerSevenViaScript(int $accountId): array
+    {
+        $callbackUrl = config('app.url') . '/api/webhooks/layerseven-automation';
+
+        Log::info('[ProviderAutomationService] Triggering LayerSeven script via Flask API', [
+            'account_id' => $accountId,
+            'callback_url' => $callbackUrl,
+            'base_url' => $this->baseUrl,
+        ]);
+
+        try {
+            $response = Http::withToken($this->apiKey)
+                ->timeout(30)
+                ->post("{$this->baseUrl}/api/generate/layerseven", [
+                    'user_id' => $accountId,
+                    'callback_url' => $callbackUrl,
+                ]);
+
+            $body = $response->json();
+
+            if (! $response->successful()) {
+                Log::error('[ProviderAutomationService] Flask API error response for LayerSeven', [
+                    'status' => $response->status(),
+                    'body' => $body,
+                ]);
+
+                return [
+                    'success' => false,
+                    'message' => 'Failed to trigger LayerSeven automation script',
+                    'error' => $body['error'] ?? "HTTP {$response->status()}",
+                ];
+            }
+
+            Log::info('[ProviderAutomationService] LayerSeven Flask API call succeeded', [
+                'status' => $body['status'] ?? 'unknown',
+                'account_id' => $accountId,
+            ]);
+
+            return [
+                'success' => true,
+                'message' => $body['message'] ?? 'LayerSeven automation started',
+                'error' => null,
+            ];
+
+        } catch (ConnectionException $e) {
+            Log::error('[ProviderAutomationService] Connection failed to Flask API for LayerSeven', [
+                'error' => $e->getMessage()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Could not connect to automation API',
+                'error' => $e->getMessage(),
+            ];
+
+        } catch (\Throwable $e) {
+            Log::error('[ProviderAutomationService] Unexpected error calling Flask API for LayerSeven', [
+                'error' => $e->getMessage()
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'LayerSeven automation API call failed',
+                'error' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
      * Trigger Ugeen account generation via Python script (async with webhook callback).
      * The script will POST results back to our webhook endpoint when complete.
      *
