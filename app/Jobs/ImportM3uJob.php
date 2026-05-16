@@ -95,13 +95,39 @@ class ImportM3uJob implements ShouldQueue
 
                 try {
                     $attrs     = $this->parseExtInf($pendingExtInf);
-                    $groupName = $attrs['group-title'] ?: 'Uncategorized';
+                    $channelName = $attrs['name'] ?: $streamUrl;
 
-                    // Skip excluded groups (e.g. "24/7" VOD entries)
-                    if (! empty($excludedGroups) && in_array(strtolower($groupName), $excludedGroups, true)) {
-                        $this->summary['skipped']++;
+                    // Skip VOD content (movies/series)
+                    if ($this->isVodContent($streamUrl, $channelName)) {
+                        $this->summary['skipped_vod'] = ($this->summary['skipped_vod'] ?? 0) + 1;
                         $pendingExtInf = null;
                         continue;
+                    }
+
+                    $groupName = $attrs['group-title'] ?: 'Uncategorized';
+
+                    // Skip excluded groups (improved matching: exact, prefix, or substring)
+                    if (! empty($excludedGroups)) {
+                        $groupLower = strtolower($groupName);
+                        $excluded = false;
+
+                        foreach ($excludedGroups as $pattern) {
+                            $patternLower = strtolower($pattern);
+
+                            // Match if exact, starts with, or contains pattern
+                            if ($groupLower === $patternLower ||
+                                str_starts_with($groupLower, $patternLower) ||
+                                str_contains($groupLower, $patternLower)) {
+                                $excluded = true;
+                                break;
+                            }
+                        }
+
+                        if ($excluded) {
+                            $this->summary['skipped']++;
+                            $pendingExtInf = null;
+                            continue;
+                        }
                     }
 
                     // Resolve or create channel group (cache group id by name)
@@ -174,7 +200,18 @@ class ImportM3uJob implements ShouldQueue
             ]);
         }
 
-        Log::info('ImportM3uJob: Completed', array_merge(['source' => $this->source], $this->summary));
+        // Count total groups created
+        $this->summary['groups'] = count($groupCache);
+
+        Log::info('ImportM3uJob: Completed', [
+            'source' => $this->source,
+            'source_id' => $this->sourceId,
+            'channels_imported' => $this->summary['created'],
+            'groups_created' => $this->summary['groups'],
+            'skipped_excluded_groups' => $this->summary['skipped'] ?? 0,
+            'skipped_vod_content' => $this->summary['skipped_vod'] ?? 0,
+            'total_processed' => $this->summary['created'] + ($this->summary['skipped'] ?? 0) + ($this->summary['skipped_vod'] ?? 0),
+        ]);
 
         return $this->summary;
     }
@@ -234,6 +271,21 @@ class ImportM3uJob implements ShouldQueue
             }
         }
 
+        // Sub-group extraction (if enabled) - takes priority over group-title attribute
+        if ($this->shouldExtractSubgroups() && $attrs['name'] !== '') {
+            $extracted = $this->extractSubGroup($attrs['name']);
+            if ($extracted !== null) {
+                $attrs['group-title'] = $extracted;
+
+                // Optionally clean channel name by removing the extracted prefix
+                $attrs['name'] = preg_replace(
+                    '/^' . preg_quote($extracted, '/') . '\s*[-–—]\s*/',
+                    '',
+                    $attrs['name']
+                );
+            }
+        }
+
         // If no group-title found, infer from channel name prefix (simple M3U format)
         if ($attrs['group-title'] === '' && $attrs['name'] !== '') {
             $name = $attrs['name'];
@@ -285,5 +337,112 @@ class ImportM3uJob implements ShouldQueue
             }
             fclose($handle);
         })();
+    }
+
+    /**
+     * Check if stream URL or channel name indicates VOD/series content.
+     *
+     * Detects movies and TV series by:
+     * - File extensions (.mp4, .mkv, .avi, etc.)
+     * - URL patterns (/movie/, /series/, /vod/)
+     * - Episode naming patterns (S01 E01, Season 1, etc.)
+     *
+     * @param string $streamUrl The stream URL
+     * @param string $channelName The channel display name
+     * @return bool True if this is VOD content, false if live TV
+     */
+    private function isVodContent(string $streamUrl, string $channelName): bool
+    {
+        // Method 1: File extension check
+        $vodExtensions = ['mp4', 'mkv', 'avi', 'm4v', 'mov', 'wmv', 'flv', 'webm'];
+        $urlPath = parse_url($streamUrl, PHP_URL_PATH);
+        $extension = $urlPath ? strtolower(pathinfo($urlPath, PATHINFO_EXTENSION)) : '';
+
+        if (in_array($extension, $vodExtensions, true)) {
+            return true;
+        }
+
+        // Method 2: URL pattern check
+        $vodPatterns = ['/movie/', '/vod/', '/series/', '/film/', '/tv-shows/', '/tvshows/'];
+        foreach ($vodPatterns as $pattern) {
+            if (stripos($streamUrl, $pattern) !== false) {
+                return true;
+            }
+        }
+
+        // Method 3: Episode naming pattern
+        $episodePatterns = [
+            '/S\d{2}\s*E\d{2}/i',     // S01 E01, S02E12
+            '/Season\s*\d+/i',         // Season 1
+            '/Episode\s*\d+/i',        // Episode 1
+            '/\sEp\s*\d+/i',          // Ep 1
+        ];
+
+        foreach ($episodePatterns as $pattern) {
+            if (preg_match($pattern, $channelName)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if sub-group extraction is enabled for this source.
+     *
+     * @return bool
+     */
+    private function shouldExtractSubgroups(): bool
+    {
+        if (!$this->sourceId) {
+            return false;
+        }
+
+        static $cachedSetting = null;
+        if ($cachedSetting === null) {
+            $source = M3uSource::find($this->sourceId);
+            $cachedSetting = $source?->extract_subgroups ?? false;
+        }
+
+        return $cachedSetting;
+    }
+
+    /**
+     * Extract sub-group from channel name prefix.
+     *
+     * Examples:
+     * - "AR Morocco - MBC 1" → "AR Morocco"
+     * - "AR Tunisia - Nessma TV" → "AR Tunisia"
+     * - "[US] CNN" → "US"
+     * - "(UK) BBC" → "UK"
+     * - "USA | CNN" → "USA"
+     *
+     * @param string $channelName The channel display name
+     * @return string|null The extracted sub-group name, or null if no pattern matched
+     */
+    private function extractSubGroup(string $channelName): ?string
+    {
+        // Pattern 1: "AR Morocco - Channel" → "AR Morocco"
+        // Matches: 2-3 uppercase letters + space + word + hyphen
+        if (preg_match('/^([A-Z]{2,3}\s+[A-Za-z0-9]+)\s*[-–—]\s*/', $channelName, $m)) {
+            return trim($m[1]);
+        }
+
+        // Pattern 2: "[US] CNN" → "US"
+        if (preg_match('/^\[([A-Z]{2,3})\]\s*/', $channelName, $m)) {
+            return trim($m[1]);
+        }
+
+        // Pattern 3: "(UK) BBC" → "UK"
+        if (preg_match('/^\(([A-Z]{2,3})\)\s*/', $channelName, $m)) {
+            return trim($m[1]);
+        }
+
+        // Pattern 4: "USA | CNN" → "USA"
+        if (preg_match('/^([A-Z]{2,3})\s*\|\s*/', $channelName, $m)) {
+            return trim($m[1]);
+        }
+
+        return null;
     }
 }
