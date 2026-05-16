@@ -30,6 +30,18 @@ return Application::configure(basePath: dirname(__DIR__))
                     Route::post('/layerseven-automation', [\App\Http\Controllers\LayerSevenWebhookController::class, 'handleCallback']);
                     Route::post('/ugeen-automation', [\App\Http\Controllers\UgeenWebhookController::class, 'handleCallback']);
                 });
+
+            // Channel Management API routes — for external integration or admin panel
+            Route::prefix('api/accounts')
+                ->middleware(['api'])
+                ->group(function () {
+                    Route::get('/{account}/channel-groups', [\App\Http\Controllers\Api\ChannelManagementController::class, 'listGroups']);
+                    Route::patch('/{account}/channel-groups/{group}', [\App\Http\Controllers\Api\ChannelManagementController::class, 'toggleGroup']);
+                    Route::get('/{account}/channel-groups/{group}/channels', [\App\Http\Controllers\Api\ChannelManagementController::class, 'listChannelsInGroup']);
+                    Route::patch('/{account}/channels/{channel}', [\App\Http\Controllers\Api\ChannelManagementController::class, 'toggleChannel']);
+                    Route::post('/{account}/channels/bulk-toggle', [\App\Http\Controllers\Api\ChannelManagementController::class, 'bulkToggleChannels']);
+                    Route::get('/{account}/channels/search', [\App\Http\Controllers\Api\ChannelManagementController::class, 'searchChannels']);
+                });
         },
     )
     ->withMiddleware(function (Middleware $middleware) {

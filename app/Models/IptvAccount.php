@@ -89,10 +89,18 @@ class IptvAccount extends Model
     public function channelGroups(): BelongsToMany
     {
         return $this->belongsToMany(ChannelGroup::class, 'account_channel_groups', 'account_id', 'channel_group_id')
-            ->withPivot('sort_order')
+            ->withPivot(['sort_order', 'is_enabled'])
             ->orderBy('account_channel_groups.sort_order')
             ->orderBy('channel_groups.sort_order')
             ->orderBy('channel_groups.name');
+    }
+
+    /**
+     * Channel preferences for individual channel enable/disable.
+     */
+    public function channelPreferences(): HasMany
+    {
+        return $this->hasMany(AccountChannelPreference::class, 'account_id');
     }
 
     /**
@@ -211,5 +219,84 @@ class IptvAccount extends Model
         $diffInHours = $now->diffInHours($this->retry_scheduled_at, false);
         $roundedHours = round($diffInHours);
         return "Will renew in {$roundedHours} " . str('hour')->plural($roundedHours);
+    }
+
+    /**
+     * Get enabled channel groups for this account.
+     * Filters out groups where is_enabled = false in the pivot table.
+     *
+     * @return \Illuminate\Database\Eloquent\Collection<int, ChannelGroup>
+     */
+    public function getEnabledChannelGroups()
+    {
+        if (!$this->has_group_restrictions) {
+            // No restrictions: return all resolved groups (already filtered by adult, source, etc.)
+            return $this->resolvedChannelGroups();
+        }
+
+        // Has restrictions: filter by is_enabled in pivot
+        $sourceId = $this->m3u_source_id;
+
+        if (!$sourceId) {
+            return collect();
+        }
+
+        $baseQuery = ChannelGroup::query()
+            ->where('channel_groups.is_active', true)
+            ->when(!$this->allow_adult, fn (Builder $query) => $query->where('channel_groups.is_adult', false))
+            ->whereExists(function ($sub) use ($sourceId) {
+                $sub->selectRaw('1')
+                    ->from('channels')
+                    ->whereColumn('channels.channel_group_id', 'channel_groups.id')
+                    ->where('channels.m3u_source_id', $sourceId)
+                    ->where('channels.is_active', true);
+            });
+
+        $allowedGroupIds = $baseQuery->pluck('channel_groups.id');
+
+        if ($allowedGroupIds->isEmpty()) {
+            return collect();
+        }
+
+        return $this->channelGroups()
+            ->whereIn('channel_groups.id', $allowedGroupIds)
+            ->wherePivot('is_enabled', true)
+            ->orderBy('account_channel_groups.sort_order')
+            ->orderBy('channel_groups.sort_order')
+            ->orderBy('channel_groups.name')
+            ->get();
+    }
+
+    /**
+     * Get a query builder for channels available to this account,
+     * respecting group and individual channel preferences.
+     *
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    public function getEnabledChannelsQuery(): Builder
+    {
+        $enabledGroups = $this->getEnabledChannelGroups();
+        $enabledGroupIds = $enabledGroups->pluck('id');
+
+        if ($enabledGroupIds->isEmpty()) {
+            return Channel::query()->whereRaw('1 = 0');
+        }
+
+        $query = Channel::query()
+            ->where('m3u_source_id', $this->m3u_source_id)
+            ->where('is_active', true)
+            ->whereIn('channel_group_id', $enabledGroupIds);
+
+        // Apply individual channel preferences
+        // If a preference exists with is_enabled = false, exclude that channel
+        $disabledChannelIds = $this->channelPreferences()
+            ->where('is_enabled', false)
+            ->pluck('channel_id');
+
+        if ($disabledChannelIds->isNotEmpty()) {
+            $query->whereNotIn('id', $disabledChannelIds);
+        }
+
+        return $query;
     }
 }

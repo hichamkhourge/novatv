@@ -298,9 +298,37 @@ class IptvController extends Controller
 
         $this->logAccess($request, $account, 'playlist', 'ok');
 
+        // Get optional filters from query params
+        $options = [];
+        if ($request->has('search')) {
+            $options['search'] = $request->input('search');
+        }
+        if ($request->has('groups')) {
+            $options['groups'] = $request->input('groups');
+        }
+
         try {
-            $channels = $this->accountChannels($account)
-                ->with('channelGroup')
+            $channels = $account->getEnabledChannelsQuery();
+
+            // Apply search filter if provided
+            if (!empty($options['search'])) {
+                $search = $options['search'];
+                $channels->where(function ($q) use ($search) {
+                    $q->where('channels.name', 'ILIKE', "%{$search}%")
+                        ->orWhere('channels.tvg_name', 'ILIKE', "%{$search}%");
+                });
+            }
+
+            // Apply specific group filter if provided
+            if (!empty($options['groups'])) {
+                $groups = is_array($options['groups']) ? $options['groups'] : explode(',', $options['groups']);
+                $channels->whereIn('channel_group_id', $groups);
+            }
+
+            $channels = $channels->with('channelGroup')
+                ->orderBy('channel_group_id')
+                ->orderBy('sort_order')
+                ->orderBy('name')
                 ->get();
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::error('getPlaylist: DB error', [
