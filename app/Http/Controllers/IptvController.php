@@ -600,6 +600,32 @@ class IptvController extends Controller
             return response('Upstream unavailable', 503, ['Content-Type' => 'text/plain']);
         }
 
+        // LayerSeven: Use direct redirect instead of proxy to bypass IP restrictions
+        if ($channel->m3u_source_id) {
+            $m3uSource = \App\Models\M3uSource::find($channel->m3u_source_id);
+
+            if ($m3uSource && stripos($m3uSource->name, 'LayerSeven') !== false) {
+                // For LayerSeven, redirect directly without resolving (client handles redirects)
+                // This bypasses IP restrictions since the client connects directly to upstream
+
+                // Update stream session for tracking
+                StreamSession::updateOrCreate(
+                    ['account_id' => $account->id, 'ip_address' => $ip],
+                    ['channel_id' => $channelId, 'started_at' => now(), 'last_seen_at' => now()],
+                );
+
+                \Log::info('streamProxy: LayerSeven direct redirect', [
+                    'username'     => $username,
+                    'channel_id'   => $channelId,
+                    'redirect_url' => $providerUrl,
+                    'source_name'  => $m3uSource->name,
+                ]);
+
+                // Return direct redirect to upstream (bypasses IP restriction)
+                return redirect($providerUrl, 302);
+            }
+        }
+
         $providerConfig = $this->detectProviderConfig($providerUrl, $username, $password);
 
         if (($providerConfig['provider_name'] ?? 'generic') === 'zazy') {
